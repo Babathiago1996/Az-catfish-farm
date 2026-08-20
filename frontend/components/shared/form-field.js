@@ -1,0 +1,1 @@
+import { Label } from "@/components/ui/label";export function FormField({label,required,error,children,htmlFor}){return <div><Label htmlFor={htmlFor} required={required}>{label}</Label>{children}{error&&<p className="mt-1.5 text-xs text-red-600">{error}</p>}</div>}

@@ -1,0 +1,1 @@
+export function Label({ children, htmlFor, required=false }) { return <label htmlFor={htmlFor} className="mb-1.5 block text-sm font-semibold">{children}{required && <span className="ml-1 text-red-500">*</span>}</label>; }

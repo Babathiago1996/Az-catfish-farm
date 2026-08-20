@@ -1,0 +1,60 @@
+@import "tailwindcss";
+
+:root {
+  --background: #f6f8fb;
+  --foreground: #0b1628;
+  --card: #ffffff;
+  --muted: #64748b;
+  --border: #e2e8f0;
+  --primary: #0b6bcb;
+  --primary-foreground: #ffffff;
+  --accent: #e8f3ff;
+  --success: #0f9f6e;
+  --warning: #d97706;
+  --danger: #dc2626;
+}
+
+.dark {
+  --background: #08111f;
+  --foreground: #f8fafc;
+  --card: #0f1b2d;
+  --muted: #94a3b8;
+  --border: #1e2d43;
+  --primary: #4ea3ff;
+  --primary-foreground: #07101e;
+  --accent: #10243d;
+  --success: #34d399;
+  --warning: #fbbf24;
+  --danger: #f87171;
+}
+
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+body {
+  margin: 0;
+  background: var(--background);
+  color: var(--foreground);
+  font-family: Arial, Helvetica, sans-serif;
+}
+button, input, textarea, select { font: inherit; }
+::selection { background: color-mix(in srgb, var(--primary) 20%, transparent); }
+
+.glass {
+  background: color-mix(in srgb, var(--card) 86%, transparent);
+  backdrop-filter: blur(18px);
+  border: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
+}
+
+.mesh-bg {
+  background:
+    radial-gradient(circle at 10% 10%, rgba(30, 136, 229, .14), transparent 30%),
+    radial-gradient(circle at 90% 20%, rgba(20, 184, 166, .12), transparent 28%),
+    radial-gradient(circle at 50% 100%, rgba(59, 130, 246, .10), transparent 35%);
+}
+
+.text-balance { text-wrap: balance; }
+
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 999px; }
+.dark ::-webkit-scrollbar-thumb { background: #334155; }

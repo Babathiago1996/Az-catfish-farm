@@ -1,0 +1,2 @@
+import { Button } from "@/components/ui/button";
+export function Pagination({page=1,pages=0,onChange}){if(!pages||pages<=1)return null;return <div className="flex items-center justify-between gap-3 pt-4 text-xs text-[var(--muted)]"><span>Page {page} of {pages}</span><div className="flex gap-2"><Button size="sm" variant="outline" disabled={page<=1} onClick={()=>onChange(page-1)}>Previous</Button><Button size="sm" variant="outline" disabled={page>=pages} onClick={()=>onChange(page+1)}>Next</Button></div></div>}
