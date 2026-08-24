@@ -1,7 +1,7 @@
 const express = require("express");
 
 const {
-  protect
+  protect,
 } = require("../middleware/authMiddleware");
 
 const controller = require("../controllers/waterManagementController");
@@ -11,46 +11,88 @@ const {
   updateWaterManagementValidators,
   waterManagementIdValidators,
   listWaterManagementValidators,
-  recordWaterChangeValidators
+  recordWaterChangeValidators,
 } = require("../validators/waterManagementValidators");
 
 const router = express.Router();
 
+/*
+|--------------------------------------------------------------------------
+| Authentication
+|--------------------------------------------------------------------------
+*/
+
 router.use(protect);
+
+/*
+|--------------------------------------------------------------------------
+| Summary
+|--------------------------------------------------------------------------
+*/
 
 router.get(
   "/summary",
-  controller.getWaterChangeSummary
+  controller.getWaterChangeSummary,
 );
+
+/*
+|--------------------------------------------------------------------------
+| List
+|--------------------------------------------------------------------------
+*/
 
 router.get(
   "/",
   listWaterManagementValidators,
-  controller.listWaterManagement
+  controller.listWaterManagement,
 );
+
+/*
+|--------------------------------------------------------------------------
+| Create / Upsert
+|--------------------------------------------------------------------------
+*/
 
 router.post(
   "/",
   createWaterManagementValidators,
-  controller.createWaterManagement
+  controller.createWaterManagement,
 );
+
+/*
+|--------------------------------------------------------------------------
+| Get One
+|--------------------------------------------------------------------------
+*/
 
 router.get(
   "/:id",
   waterManagementIdValidators,
-  controller.getWaterManagement
+  controller.getWaterManagement,
 );
+
+/*
+|--------------------------------------------------------------------------
+| Update
+|--------------------------------------------------------------------------
+*/
 
 router.patch(
   "/:id",
   updateWaterManagementValidators,
-  controller.updateWaterManagement
+  controller.updateWaterManagement,
 );
+
+/*
+|--------------------------------------------------------------------------
+| Record Actual Water Change
+|--------------------------------------------------------------------------
+*/
 
 router.post(
   "/:id/water-change",
   recordWaterChangeValidators,
-  controller.recordWaterChange
+  controller.recordWaterChange,
 );
 
 module.exports = router;

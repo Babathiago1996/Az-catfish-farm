@@ -302,6 +302,41 @@ const updateProfile = async ({ adminId, data = {}, ipAddress, userAgent }) => {
   };
 };
 
+const updateAvatar = async ({ adminId, avatar, ipAddress, userAgent }) => {
+  const admin = await Admin.findById(adminId);
+
+  if (!admin || !admin.isActive) {
+    return {
+      success: false,
+      reason: "ADMIN_NOT_FOUND",
+    };
+  }
+
+  admin.avatar = {
+    url: avatar?.url || "",
+    publicId: avatar?.publicId || "",
+  };
+
+  await admin.save();
+
+  await ActivityLog.create({
+    action: "profile_update",
+    entityType: "Admin",
+    entityId: admin._id,
+    description: "Administrator avatar was updated.",
+    metadata: {
+      publicId: admin.avatar.publicId,
+    },
+    ipAddress: ipAddress || "",
+    userAgent: userAgent || "",
+  });
+
+  return {
+    success: true,
+    admin: admin.toSafeObject(),
+  };
+};
+
 module.exports = {
   login,
   requestPasswordReset,
@@ -310,4 +345,5 @@ module.exports = {
   changePassword,
   getCurrentAdmin,
   updateProfile,
+  updateAvatar,
 };

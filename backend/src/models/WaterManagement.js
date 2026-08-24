@@ -2,6 +2,13 @@ const mongoose = require("mongoose");
 
 const waterManagementSchema = new mongoose.Schema(
   {
+    /*
+     * ---------------------------------------------------------
+     * POND
+     * ---------------------------------------------------------
+     *
+     * One water-management record per pond.
+     */
     pond: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "Pond",
@@ -9,6 +16,12 @@ const waterManagementSchema = new mongoose.Schema(
       unique: true,
       index: true,
     },
+
+    /*
+     * ---------------------------------------------------------
+     * WATER CHANGE SCHEDULE
+     * ---------------------------------------------------------
+     */
 
     lastWaterChange: {
       type: Date,
@@ -22,82 +35,81 @@ const waterManagementSchema = new mongoose.Schema(
       index: true,
     },
 
-    waterQualityNotes: {
+    /*
+     * ---------------------------------------------------------
+     * SIMPLE OBSERVATIONAL WATER CONDITION
+     * ---------------------------------------------------------
+     *
+     * No laboratory measurements are required.
+     *
+     * The owner can record what is visibly observed.
+     */
+    waterCondition: {
       type: String,
-      default: "",
-      trim: true,
-      maxlength: 3000,
+      enum: [
+        "normal",
+        "cloudy",
+        "dirty",
+        "algae",
+      ],
+      default: "normal",
     },
 
-    waterParameters: {
-      temperature: {
-        type: Number,
-        default: null,
-        min: -10,
-        max: 100,
-      },
-
-      ph: {
-        type: Number,
-        default: null,
-        min: 0,
-        max: 14,
-      },
-
-      dissolvedOxygen: {
-        type: Number,
-        default: null,
-        min: 0,
-      },
-
-      ammonia: {
-        type: Number,
-        default: null,
-        min: 0,
-      },
-
-      nitrite: {
-        type: Number,
-        default: null,
-        min: 0,
-      },
+    /*
+     * ---------------------------------------------------------
+     * WATER LEVEL
+     * ---------------------------------------------------------
+     */
+    waterLevel: {
+      type: String,
+      enum: [
+        "normal",
+        "low",
+        "high",
+      ],
+      default: "normal",
     },
 
+    /*
+     * ---------------------------------------------------------
+     * PUMP
+     * ---------------------------------------------------------
+     */
     pumpStatus: {
       type: String,
-      enum: ["working", "maintenance", "faulty", "not_applicable"],
+      enum: [
+        "working",
+        "maintenance",
+        "faulty",
+        "not_applicable",
+      ],
       default: "working",
     },
 
+    /*
+     * ---------------------------------------------------------
+     * ELECTRICITY / POWER
+     * ---------------------------------------------------------
+     */
     electricityStatus: {
       type: String,
-      enum: ["available", "unavailable", "generator", "solar"],
+      enum: [
+        "available",
+        "unavailable",
+        "generator",
+        "solar",
+      ],
       default: "available",
     },
 
-    pumpMaintenanceDate: {
-      type: Date,
-      default: null,
-    },
-
-    nextPumpMaintenanceDate: {
-      type: Date,
-      default: null,
-      index: true,
-    },
-
-    generatorMaintenanceDate: {
-      type: Date,
-      default: null,
-    },
-
-    nextGeneratorMaintenanceDate: {
-      type: Date,
-      default: null,
-      index: true,
-    },
-
-    notes: {
+    /*
+     * ---------------------------------------------------------
+     * WATER CHANGE / CONDITION NOTE
+     * ---------------------------------------------------------
+     *
+     * One practical note is enough.
+     */
+    waterChangeNotes: {
       type: String,
       default: "",
       trim: true,
@@ -110,9 +122,15 @@ const waterManagementSchema = new mongoose.Schema(
   },
 );
 
+/*
+ * Useful index for schedule-related queries.
+ */
 waterManagementSchema.index({
   pond: 1,
   nextWaterChange: 1,
 });
 
-module.exports = mongoose.model("WaterManagement", waterManagementSchema);
+module.exports = mongoose.model(
+  "WaterManagement",
+  waterManagementSchema,
+);

@@ -4,13 +4,20 @@ const Mortality = require("../models/Mortality");
 const Pond = require("../models/Pond");
 const Stocking = require("../models/Stocking");
 const ActivityLog = require("../models/ActivityLog");
-const {
-  notifyMortalityCreated,
-} = require("../services/notificationAutomationService");
 
-/**
- * Normalize a value to the beginning of its calendar day.
+const {
+  uploadImageBuffer,
+  deleteCloudinaryImage,
+} = require("../utils/cloudinaryUpload");
+
+const { notifyMortalityCreated } = require("./notificationAutomationService");
+
+/*
+ * ============================================================
+ * HELPERS
+ * ============================================================
  */
+
 const startOfDay = (value) => {
   const date = new Date(value);
 
@@ -23,9 +30,6 @@ const startOfDay = (value) => {
   return date;
 };
 
-/**
- * Normalize a value to the end of its calendar day.
- */
 const endOfDay = (value) => {
   const date = new Date(value);
 
@@ -38,9 +42,80 @@ const endOfDay = (value) => {
   return date;
 };
 
-/**
- * Get total number of fish stocked into a pond.
+/*
+ * Normalize the images returned to the frontend.
+ *
+ * This guarantees that every mortality record has:
+ *
+ * images: [
+ *   { url: "...", publicId: "..." },
+ *   ...
+ * ]
+ *
+ * (up to 5 entries), built from the new `images` array
+ * field, or falling back to the legacy single `image`
+ * field for records created before multi-image support.
+ *
+ * `image` is kept on the response too (mirrors images[0])
+ * so any older frontend code relying on it keeps working.
  */
+const normalizeMortalityRecord = (record) => {
+  if (!record) {
+    return record;
+  }
+
+  const normalized = {
+    ...record,
+  };
+
+  let images = Array.isArray(record.images) ? record.images : [];
+
+  images = images
+    .map((image) => ({
+      url: image?.url || image?.secure_url || image?.secureUrl || "",
+      publicId: image?.publicId || image?.public_id || "",
+    }))
+    .filter((image) => image.url);
+
+  /*
+   * Fall back to the legacy single `image` field only
+   * when there are no entries in `images`.
+   */
+  if (!images.length) {
+    const legacyUrl =
+      record.image?.url ||
+      record.image?.secure_url ||
+      record.image?.secureUrl ||
+      "";
+
+    const legacyPublicId =
+      record.image?.publicId || record.image?.public_id || "";
+
+    if (legacyUrl) {
+      images = [
+        {
+          url: legacyUrl,
+          publicId: legacyPublicId,
+        },
+      ];
+    }
+  }
+
+  images = images.slice(0, 5);
+
+  normalized.images = images;
+
+  normalized.image = images[0] || null;
+
+  return normalized;
+};
+
+/*
+ * ============================================================
+ * STOCK / POND CALCULATIONS
+ * ============================================================
+ */
+
 const getTotalStockedForPond = async (pondId) => {
   if (!mongoose.isValidObjectId(pondId)) {
     return 0;
@@ -65,9 +140,6 @@ const getTotalStockedForPond = async (pondId) => {
   return Number(result[0]?.totalStocked || 0);
 };
 
-/**
- * Get total mortality recorded for a pond.
- */
 const getMortalityTotalForPond = async (pondId, excludeId = null) => {
   if (!mongoose.isValidObjectId(pondId)) {
     return 0;
@@ -100,16 +172,7 @@ const getMortalityTotalForPond = async (pondId, excludeId = null) => {
   return Number(result[0]?.total || 0);
 };
 
-/**
- * Calculate the current available fish count for a pond.
- *
- * available fish =
- * total stocked - total mortality
- */
-const calculateAvailableFish = async (
-  pondId,
-  excludeMortalityId = null,
-) => {
+const calculateAvailableFish = async (pondId, excludeMortalityId = null) => {
   const totalStocked = await getTotalStockedForPond(pondId);
 
   const totalMortality = await getMortalityTotalForPond(
@@ -120,9 +183,6 @@ const calculateAvailableFish = async (
   return Math.max(totalStocked - totalMortality, 0);
 };
 
-/**
- * Recalculate and synchronize Pond.currentFishCount.
- */
 const recalculatePondFishCount = async (pondId) => {
   if (!mongoose.isValidObjectId(pondId)) {
     return null;
@@ -143,9 +203,6 @@ const recalculatePondFishCount = async (pondId) => {
   return pond;
 };
 
-/**
- * Build date filters safely.
- */
 const buildDateFilter = ({ from, to }) => {
   if (!from && !to) {
     return null;
@@ -169,13 +226,89 @@ const buildDateFilter = ({ from, to }) => {
     }
   }
 
-  return Object.keys(dateFilter).length > 0 ? dateFilter : null;
+  return Object.keys(dateFilter).length ? dateFilter : null;
 };
 
-/**
- * Create a mortality record.
+/*
+ * ============================================================
+ * CLOUDINARY
+ * ============================================================
  */
-const createMortality = async ({ data, ipAddress, userAgent }) => {
+
+const uploadMortalityImage = async (file) => {
+  if (!file) {
+    return null;
+  }
+
+  return uploadImageBuffer(file.buffer, {
+    folder: "az-fish-farm/mortality",
+  });
+};
+
+/*
+ * Upload up to 5 image files to Cloudinary.
+ *
+ * Returns an array of { url, publicId }.
+ *
+ * If any upload fails partway through, everything that
+ * was already uploaded in this batch is cleaned up before
+ * the error is re-thrown, so we never leave orphaned
+ * Cloudinary assets behind.
+ */
+const uploadMortalityImages = async (files) => {
+  if (!files || !files.length) {
+    return [];
+  }
+
+  const limitedFiles = files.slice(0, 5);
+
+  /*
+   * Upload every image concurrently instead of one at a
+   * time. Uploading 5 images sequentially (each taking a
+   * few seconds) could easily add up to 15-20+ seconds,
+   * which is enough to trip the frontend's request timeout
+   * even though the backend was still working fine.
+   * Running them in parallel brings the total wait time
+   * down to roughly the slowest single upload instead of
+   * the sum of all of them.
+   */
+  const settled = await Promise.allSettled(
+    limitedFiles.map((file) => uploadMortalityImage(file)),
+  );
+
+  const uploaded = settled
+    .filter((result) => result.status === "fulfilled" && result.value)
+    .map((result) => result.value);
+
+  const failure = settled.find((result) => result.status === "rejected");
+
+  if (failure) {
+    /*
+     * At least one upload failed. Clean up anything that
+     * did succeed so we don't leave orphaned images sitting
+     * in Cloudinary, then surface the original error.
+     */
+    await Promise.all(
+      uploaded.map((image) =>
+        image?.publicId
+          ? deleteCloudinaryImage(image.publicId).catch(() => null)
+          : null,
+      ),
+    );
+
+    throw failure.reason;
+  }
+
+  return uploaded;
+};
+
+/*
+ * ============================================================
+ * CREATE
+ * ============================================================
+ */
+
+const createMortality = async ({ data, files, ipAddress, userAgent }) => {
   if (!mongoose.isValidObjectId(data.pond)) {
     return {
       success: false,
@@ -219,66 +352,97 @@ const createMortality = async ({ data, ipAddress, userAgent }) => {
     };
   }
 
-  const record = await Mortality.create({
-    date,
-    pond: pond._id,
-    quantity,
-    estimatedCause: data.estimatedCause || "unknown",
-    notes: data.notes || "",
-    image: {
-      url: data.imageUrl || "",
-      publicId: data.imagePublicId || "",
-    },
-  });
+  let uploadedImages = [];
 
-  /**
-   * Synchronize the pond after creating mortality.
-   */
-  const updatedPond = await recalculatePondFishCount(pond._id);
+  try {
+    if (files && files.length) {
+      uploadedImages = await uploadMortalityImages(files);
+    }
 
-  await ActivityLog.create({
-    action: "create",
-    entityType: "Mortality",
-    entityId: record._id,
-    description: `${record.quantity} fish mortality was recorded.`,
-    metadata: {
-      pondId: record.pond,
-      quantity: record.quantity,
-      estimatedCause: record.estimatedCause,
-      remainingFish: updatedPond?.currentFishCount || 0,
-    },
-    ipAddress: ipAddress || "",
-    userAgent: userAgent || "",
-  });
+    const mortalityData = {
+      date,
+      pond: pond._id,
+      quantity,
+      estimatedCause: data.estimatedCause || "unknown",
+      notes: data.notes || "",
+    };
 
-  const populatedRecord = await Mortality.findById(record._id)
-    .populate(
-      "pond",
-      "name pondNumber pondType pondSize stockingDate currentFishCount currentAverageWeight waterSource status",
-    )
-    .lean();
+    if (uploadedImages.length) {
+      mortalityData.images = uploadedImages.map((image) => ({
+        url: image.url,
+        publicId: image.publicId || "",
+      }));
+    }
 
-  await notifyMortalityCreated({
-    mortality: populatedRecord,
-  });
+    const record = await Mortality.create(mortalityData);
 
-  return {
-    success: true,
-    record: populatedRecord,
-    pond: updatedPond,
-  };
+    const updatedPond = await recalculatePondFishCount(pond._id);
+
+    await ActivityLog.create({
+      action: "create",
+      entityType: "Mortality",
+      entityId: record._id,
+
+      description: `${record.quantity} fish mortality was recorded.`,
+
+      metadata: {
+        pondId: record.pond,
+        quantity: record.quantity,
+        estimatedCause: record.estimatedCause,
+        remainingFish: updatedPond?.currentFishCount || 0,
+        imageCount: Array.isArray(record.images) ? record.images.length : 0,
+      },
+
+      ipAddress: ipAddress || "",
+      userAgent: userAgent || "",
+    });
+
+    const populatedRecord = await Mortality.findById(record._id)
+      .populate(
+        "pond",
+        "name pondNumber pondType pondSize stockingDate currentFishCount currentAverageWeight waterSource status",
+      )
+      .lean();
+
+    const normalizedRecord = normalizeMortalityRecord(populatedRecord);
+
+    try {
+      await notifyMortalityCreated({
+        mortality: normalizedRecord,
+      });
+    } catch (notificationError) {
+      console.error("Mortality notification failed:", notificationError);
+    }
+
+    return {
+      success: true,
+      record: normalizedRecord,
+      pond: updatedPond,
+    };
+  } catch (error) {
+    if (uploadedImages.length) {
+      await Promise.all(
+        uploadedImages.map((image) =>
+          image?.publicId
+            ? deleteCloudinaryImage(image.publicId).catch((cleanupError) => {
+                console.error("Cloudinary cleanup failed:", cleanupError);
+              })
+            : null,
+        ),
+      );
+    }
+
+    throw error;
+  }
 };
 
-/**
- * List mortality records.
+/*
+ * ============================================================
+ * LIST
+ * ============================================================
  */
-const listMortality = async ({
-  pond,
-  from,
-  to,
-  page = 1,
-  limit = 30,
-}) => {
+
+const listMortality = async ({ pond, from, to, page = 1, limit = 30 }) => {
   const currentPage = Math.max(Number(page) || 1, 1);
 
   const pageSize = Math.min(Math.max(Number(limit) || 30, 1), 100);
@@ -298,7 +462,7 @@ const listMortality = async ({
     filter.date = dateFilter;
   }
 
-  const [records, total] = await Promise.all([
+  const [rawRecords, total] = await Promise.all([
     Mortality.find(filter)
       .populate(
         "pond",
@@ -315,39 +479,53 @@ const listMortality = async ({
     Mortality.countDocuments(filter),
   ]);
 
+  const records = rawRecords.map((record) => normalizeMortalityRecord(record));
+
   return {
     records,
+
     pagination: {
       page: currentPage,
       limit: pageSize,
       total,
+
       pages: Math.ceil(total / pageSize),
     },
   };
 };
 
-/**
- * Get one mortality record by ID.
+/*
+ * ============================================================
+ * GET ONE
+ * ============================================================
  */
+
 const getMortalityById = async (id) => {
   if (!mongoose.isValidObjectId(id)) {
     return null;
   }
 
-  return Mortality.findById(id)
+  const record = await Mortality.findById(id)
     .populate(
       "pond",
       "name pondNumber pondType pondSize stockingDate currentFishCount currentAverageWeight waterSource status",
     )
     .lean();
+
+  return normalizeMortalityRecord(record);
 };
 
-/**
- * Update a mortality record.
+/*
+ * ============================================================
+ * UPDATE
+ * ============================================================
  */
+
 const updateMortality = async ({
   id,
   data,
+  files,
+  removeImage = false,
   ipAddress,
   userAgent,
 }) => {
@@ -369,8 +547,7 @@ const updateMortality = async ({
 
   const oldPondId = String(record.pond);
 
-  const newPondId =
-    data.pond !== undefined ? String(data.pond) : oldPondId;
+  const newPondId = data.pond !== undefined ? String(data.pond) : oldPondId;
 
   if (!mongoose.isValidObjectId(newPondId)) {
     return {
@@ -414,13 +591,9 @@ const updateMortality = async ({
     }
   }
 
-  const excludeId =
-    newPondId === oldPondId ? record._id : null;
+  const excludeId = newPondId === oldPondId ? record._id : null;
 
-  const availableFish = await calculateAvailableFish(
-    newPondId,
-    excludeId,
-  );
+  const availableFish = await calculateAvailableFish(newPondId, excludeId);
 
   if (newQuantity > availableFish) {
     return {
@@ -429,71 +602,129 @@ const updateMortality = async ({
     };
   }
 
-  record.date = newDate;
-  record.pond = newPondId;
-  record.quantity = newQuantity;
+  let uploadedImages = [];
 
-  if (data.estimatedCause !== undefined) {
-    record.estimatedCause = data.estimatedCause || "unknown";
+  try {
+    if (files && files.length) {
+      uploadedImages = await uploadMortalityImages(files);
+    }
+
+    /*
+     * Collect every publicId currently on the record
+     * (new `images` array, plus the legacy single
+     * `image` field for older records) so we know what
+     * to clean up in Cloudinary if it's being replaced
+     * or removed.
+     */
+    const oldPublicIds = [
+      ...(Array.isArray(record.images)
+        ? record.images.map((image) => image?.publicId).filter(Boolean)
+        : []),
+      record.image?.publicId,
+    ].filter(Boolean);
+
+    record.date = newDate;
+    record.pond = newPondId;
+    record.quantity = newQuantity;
+
+    if (data.estimatedCause !== undefined) {
+      record.estimatedCause = data.estimatedCause || "unknown";
+    }
+
+    if (data.notes !== undefined) {
+      record.notes = data.notes || "";
+    }
+
+    if (uploadedImages.length) {
+      record.images = uploadedImages.map((image) => ({
+        url: image.url,
+        publicId: image.publicId || "",
+      }));
+
+      record.image = undefined;
+    } else if (removeImage) {
+      record.images = [];
+      record.image = undefined;
+    }
+
+    await record.save();
+
+    const pondsToUpdate =
+      oldPondId === newPondId ? [newPondId] : [oldPondId, newPondId];
+
+    for (const pondId of pondsToUpdate) {
+      await recalculatePondFishCount(pondId);
+    }
+
+    if (oldPublicIds.length && (uploadedImages.length || removeImage)) {
+      await Promise.all(
+        oldPublicIds.map((publicId) =>
+          deleteCloudinaryImage(publicId).catch((cloudinaryError) => {
+            console.error(
+              "Unable to delete old Cloudinary image:",
+              cloudinaryError,
+            );
+          }),
+        ),
+      );
+    }
+
+    await ActivityLog.create({
+      action: "update",
+      entityType: "Mortality",
+      entityId: record._id,
+
+      description: "Mortality record was updated.",
+
+      metadata: {
+        pondId: record.pond,
+        quantity: record.quantity,
+        estimatedCause: record.estimatedCause,
+        date: record.date,
+        imageCount: Array.isArray(record.images) ? record.images.length : 0,
+      },
+
+      ipAddress: ipAddress || "",
+      userAgent: userAgent || "",
+    });
+
+    const updatedRecord = await Mortality.findById(record._id)
+      .populate(
+        "pond",
+        "name pondNumber pondType pondSize stockingDate currentFishCount currentAverageWeight waterSource status",
+      )
+      .lean();
+
+    return {
+      success: true,
+      record: normalizeMortalityRecord(updatedRecord),
+    };
+  } catch (error) {
+    if (uploadedImages.length) {
+      await Promise.all(
+        uploadedImages.map((image) =>
+          image?.publicId
+            ? deleteCloudinaryImage(image.publicId).catch((cleanupError) => {
+                console.error(
+                  "Cloudinary replacement cleanup failed:",
+                  cleanupError,
+                );
+              })
+            : null,
+        ),
+      );
+    }
+
+    throw error;
   }
-
-  if (data.notes !== undefined) {
-    record.notes = data.notes || "";
-  }
-
-  if (data.imageUrl !== undefined) {
-    record.image.url = data.imageUrl || "";
-  }
-
-  if (data.imagePublicId !== undefined) {
-    record.image.publicId = data.imagePublicId || "";
-  }
-
-  await record.save();
-
-  const pondsToUpdate =
-    oldPondId === newPondId
-      ? [newPondId]
-      : [oldPondId, newPondId];
-
-  for (const pondId of pondsToUpdate) {
-    await recalculatePondFishCount(pondId);
-  }
-
-  await ActivityLog.create({
-    action: "update",
-    entityType: "Mortality",
-    entityId: record._id,
-    description: "Mortality record was updated.",
-    metadata: {
-      pondId: record.pond,
-      quantity: record.quantity,
-      estimatedCause: record.estimatedCause,
-      date: record.date,
-      imageUpdated:
-        data.imageUrl !== undefined ||
-        data.imagePublicId !== undefined,
-    },
-    ipAddress: ipAddress || "",
-    userAgent: userAgent || "",
-  });
-
-  const updatedRecord = await Mortality.findById(record._id)
-    .populate(
-      "pond",
-      "name pondNumber pondType pondSize stockingDate currentFishCount currentAverageWeight waterSource status",
-    )
-    .lean();
-
-  return {
-    success: true,
-    record: updatedRecord,
-  };
 };
 
-/**
- * Get mortality summary.
+/*
+ * ============================================================
+ * SUMMARY
+ * ============================================================
  */
+
 const getMortalitySummary = async ({ pond, from, to }) => {
   const filter = {};
 
@@ -602,9 +833,11 @@ const getMortalitySummary = async ({ pond, from, to }) => {
               "$estimatedCause",
             ],
           },
+
           quantity: {
             $sum: "$quantity",
           },
+
           records: {
             $sum: 1,
           },
@@ -627,14 +860,11 @@ const getMortalitySummary = async ({ pond, from, to }) => {
   ]);
 
   return {
-    totalMortality: Number(
-      aggregate[0]?.totalMortality || 0,
-    ),
+    totalMortality: Number(aggregate[0]?.totalMortality || 0),
 
     records: Number(aggregate[0]?.records || 0),
 
     byPond,
-
     byCause,
   };
 };
@@ -645,6 +875,7 @@ module.exports = {
   getMortalityById,
   updateMortality,
   getMortalitySummary,
+
   recalculatePondFishCount,
   getMortalityTotalForPond,
   getTotalStockedForPond,

@@ -1,26 +1,16 @@
-const {
-  validationResult,
-} = require("express-validator");
+const { validationResult } = require("express-validator");
 
 const asyncHandler = require("../utils/asyncHandler");
 
-const {
-  successResponse,
-  errorResponse,
-} = require("../utils/apiResponse");
+const { successResponse, errorResponse } = require("../utils/apiResponse");
 
-const expenseService =
-  require("../services/expenseService");
+const expenseService = require("../services/expenseService");
 
 const getMetadata = (req) => ({
   ipAddress:
-    req.ip ||
-    req.headers["x-forwarded-for"] ||
-    req.socket?.remoteAddress ||
-    "",
+    req.ip || req.headers["x-forwarded-for"] || req.socket?.remoteAddress || "",
 
-  userAgent:
-    req.get("user-agent") || "",
+  userAgent: req.get("user-agent") || "",
 });
 
 const validate = (req, res) => {
@@ -29,8 +19,7 @@ const validate = (req, res) => {
   if (!errors.isEmpty()) {
     errorResponse(res, {
       statusCode: 422,
-      message:
-        "Please correct the highlighted fields.",
+      message: "Please correct the highlighted fields.",
 
       errors: errors.array().map((error) => ({
         field: error.path,
@@ -44,226 +33,181 @@ const validate = (req, res) => {
   return true;
 };
 
-const createExpense = asyncHandler(
-  async (req, res) => {
-    if (!validate(req, res)) {
-      return;
-    }
+const createExpense = asyncHandler(async (req, res) => {
+  if (!validate(req, res)) {
+    return;
+  }
 
-    const expense =
-      await expenseService.createExpense({
-        data: req.body,
-        ...getMetadata(req),
-      });
+  const expense = await expenseService.createExpense({
+    data: req.body,
+    file: req.file,
+    ...getMetadata(req),
+  });
 
-    return successResponse(res, {
-      statusCode: 201,
+  return successResponse(res, {
+    statusCode: 201,
 
-      message:
-        "Expense recorded successfully.",
+    message: "Expense recorded successfully.",
 
-      data: {
-        expense,
-      },
+    data: {
+      expense,
+    },
+  });
+});
+
+const listExpenses = asyncHandler(async (req, res) => {
+  if (!validate(req, res)) {
+    return;
+  }
+
+  const result = await expenseService.listExpenses({
+    category: req.query.category,
+
+    from: req.query.from,
+
+    to: req.query.to,
+
+    search: req.query.search,
+
+    page: req.query.page,
+
+    limit: req.query.limit,
+  });
+
+  return successResponse(res, {
+    statusCode: 200,
+
+    message: "Expenses retrieved successfully.",
+
+    data: result,
+  });
+});
+
+const getExpense = asyncHandler(async (req, res) => {
+  if (!validate(req, res)) {
+    return;
+  }
+
+  const expense = await expenseService.getExpenseById(req.params.id);
+
+  if (!expense) {
+    return errorResponse(res, {
+      statusCode: 404,
+
+      message: "Expense not found.",
     });
-  },
-);
+  }
 
-const listExpenses = asyncHandler(
-  async (req, res) => {
-    if (!validate(req, res)) {
-      return;
-    }
+  return successResponse(res, {
+    statusCode: 200,
 
-    const result =
-      await expenseService.listExpenses({
-        category:
-          req.query.category,
+    message: "Expense retrieved successfully.",
 
-        from:
-          req.query.from,
+    data: {
+      expense,
+    },
+  });
+});
 
-        to:
-          req.query.to,
+const updateExpense = asyncHandler(async (req, res) => {
+  if (!validate(req, res)) {
+    return;
+  }
 
-        search:
-          req.query.search,
+  const result = await expenseService.updateExpense({
+    id: req.params.id,
 
-        page:
-          req.query.page,
+    data: req.body,
 
-        limit:
-          req.query.limit,
-      });
+    file: req.file,
 
-    return successResponse(res, {
-      statusCode: 200,
+    ...getMetadata(req),
+  });
 
-      message:
-        "Expenses retrieved successfully.",
-
-      data: result,
-    });
-  },
-);
-
-const getExpense = asyncHandler(
-  async (req, res) => {
-    if (!validate(req, res)) {
-      return;
-    }
-
-    const expense =
-      await expenseService.getExpenseById(
-        req.params.id,
-      );
-
-    if (!expense) {
+  if (!result.success) {
+    if (result.reason === "NOT_FOUND") {
       return errorResponse(res, {
         statusCode: 404,
 
-        message:
-          "Expense not found.",
+        message: "Expense not found.",
       });
     }
 
-    return successResponse(res, {
-      statusCode: 200,
+    return errorResponse(res, {
+      statusCode: 400,
 
-      message:
-        "Expense retrieved successfully.",
-
-      data: {
-        expense,
-      },
+      message: "Unable to update expense.",
     });
-  },
-);
+  }
 
-const updateExpense = asyncHandler(
-  async (req, res) => {
-    if (!validate(req, res)) {
-      return;
-    }
+  return successResponse(res, {
+    statusCode: 200,
 
-    const result =
-      await expenseService.updateExpense({
-        id: req.params.id,
+    message: "Expense updated successfully.",
 
-        data: req.body,
-
-        ...getMetadata(req),
-      });
-
-    if (!result.success) {
-      if (
-        result.reason === "NOT_FOUND"
-      ) {
-        return errorResponse(res, {
-          statusCode: 404,
-
-          message:
-            "Expense not found.",
-        });
-      }
-
-      return errorResponse(res, {
-        statusCode: 400,
-
-        message:
-          "Unable to update expense.",
-      });
-    }
-
-    return successResponse(res, {
-      statusCode: 200,
-
-      message:
-        "Expense updated successfully.",
-
-      data: {
-        expense:
-          result.expense,
-      },
-    });
-  },
-);
-
-const deleteExpense = asyncHandler(
-  async (req, res) => {
-    if (!validate(req, res)) {
-      return;
-    }
-
-    const result =
-      await expenseService.deleteExpense({
-        id: req.params.id,
-
-        ...getMetadata(req),
-      });
-
-    if (!result.success) {
-      if (
-        result.reason === "NOT_FOUND"
-      ) {
-        return errorResponse(res, {
-          statusCode: 404,
-
-          message:
-            "Expense not found.",
-        });
-      }
-
-      return errorResponse(res, {
-        statusCode: 400,
-
-        message:
-          "Unable to delete expense.",
-      });
-    }
-
-    return successResponse(res, {
-      statusCode: 200,
-
-      message:
-        "Expense deleted successfully.",
-    });
-  },
-);
-
-const getExpenseSummary =
-  asyncHandler(
-    async (req, res) => {
-      if (!validate(req, res)) {
-        return;
-      }
-
-      const summary =
-        await expenseService.getExpenseSummary(
-          {
-            from:
-              req.query.from,
-
-            to:
-              req.query.to,
-
-            category:
-              req.query.category,
-          },
-        );
-
-      return successResponse(res, {
-        statusCode: 200,
-
-        message:
-          "Expense summary retrieved successfully.",
-
-        data: {
-          summary,
-        },
-      });
+    data: {
+      expense: result.expense,
     },
-  );
+  });
+});
+
+const deleteExpense = asyncHandler(async (req, res) => {
+  if (!validate(req, res)) {
+    return;
+  }
+
+  const result = await expenseService.deleteExpense({
+    id: req.params.id,
+
+    ...getMetadata(req),
+  });
+
+  if (!result.success) {
+    if (result.reason === "NOT_FOUND") {
+      return errorResponse(res, {
+        statusCode: 404,
+
+        message: "Expense not found.",
+      });
+    }
+
+    return errorResponse(res, {
+      statusCode: 400,
+
+      message: "Unable to delete expense.",
+    });
+  }
+
+  return successResponse(res, {
+    statusCode: 200,
+
+    message: "Expense deleted successfully.",
+  });
+});
+
+const getExpenseSummary = asyncHandler(async (req, res) => {
+  if (!validate(req, res)) {
+    return;
+  }
+
+  const summary = await expenseService.getExpenseSummary({
+    from: req.query.from,
+
+    to: req.query.to,
+
+    category: req.query.category,
+  });
+
+  return successResponse(res, {
+    statusCode: 200,
+
+    message: "Expense summary retrieved successfully.",
+
+    data: {
+      summary,
+    },
+  });
+});
 
 module.exports = {
   createExpense,

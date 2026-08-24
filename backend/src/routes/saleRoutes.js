@@ -1,8 +1,6 @@
 const express = require("express");
 
-const {
-  protect,
-} = require("../middleware/authMiddleware");
+const { protect } = require("../middleware/authMiddleware");
 
 const saleController = require("../controllers/saleController");
 
@@ -23,34 +21,16 @@ router.use(protect);
  * so "summary" is not interpreted as
  * a Sale ID.
  */
-router.get(
-  "/summary",
-  salesSummaryValidators,
-  saleController.getSalesSummary
-);
+router.get("/summary", salesSummaryValidators, saleController.getSalesSummary);
 
-router.get(
-  "/",
-  listSaleValidators,
-  saleController.listSales
-);
+router.get("/", listSaleValidators, saleController.listSales);
 
-router.post(
-  "/",
-  createSaleValidators,
-  saleController.createSale
-);
+router.post("/", createSaleValidators, saleController.createSale);
 
-router.get(
-  "/:id",
-  saleIdValidators,
-  saleController.getSale
-);
+router.get("/:id", saleIdValidators, saleController.getSale);
 
-router.patch(
-  "/:id",
-  updateSaleValidators,
-  saleController.updateSale
-);
+router.patch("/:id", updateSaleValidators, saleController.updateSale);
+
+router.delete("/:id", saleIdValidators, saleController.deleteSale);
 
 module.exports = router;

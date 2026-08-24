@@ -104,7 +104,6 @@ export const api = {
     recordChange: (id, data) =>
       post(`/water-management/${id}/water-change`, data),
   },
-
   growth: {
     analytics: (params) => get("/growth/analytics", params),
 
@@ -116,17 +115,47 @@ export const api = {
 
     update: (id, data) => patch(`/growth/${id}`, data),
   },
-
   mortality: {
-    summary: (params) => get("/mortality/summary", params),
+    list: async (params = {}) => {
+      return get("/mortality", params);
+    },
 
-    list: (params) => get("/mortality", params),
+    summary: async (params = {}) => {
+      const response = await get("/mortality/summary", params);
 
-    get: (id) => get(`/mortality/${id}`),
+      /**
+       * Backend response:
+       *
+       * data: {
+       *   summary: {
+       *     totalMortality,
+       *     records,
+       *     byPond,
+       *     byCause
+       *   }
+       * }
+       *
+       * Return the summary itself so
+       * frontend can use:
+       *
+       * summary.totalMortality
+       */
+      return response?.summary ?? response;
+    },
 
-    create: (data) => post("/mortality", data),
+    get: async (id) => {
+      const response = await get(`/mortality/${id}`);
 
-    update: (id, data) => patch(`/mortality/${id}`, data),
+      return response?.record ?? response;
+    },
+
+    create: async (data) => {
+      return post("/mortality", data);
+    },
+
+    update: async (id, data) => {
+      return patch(`/mortality/${id}`, data);
+    },
   },
 
   sales: {
@@ -139,6 +168,8 @@ export const api = {
     create: (data) => post("/sales", data),
 
     update: (id, data) => patch(`/sales/${id}`, data),
+
+    remove: (id) => del(`/sales/${id}`),
 
     invoice: (id) =>
       apiClient.get(`/invoices/${id}/print`, {

@@ -66,7 +66,7 @@ const errorMiddleware = (error, req, res, next) => {
     if (error.code === "LIMIT_FILE_COUNT") {
       return errorResponse(res, {
         statusCode: 422,
-        message: "Only one image can be uploaded at a time.",
+        message: "You can upload a maximum of 5 images at a time.",
       });
     }
 

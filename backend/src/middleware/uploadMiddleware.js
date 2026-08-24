@@ -14,9 +14,7 @@ const storage = multer.memoryStorage();
 const fileFilter = (req, file, callback) => {
   if (!ALLOWED_MIME_TYPES.has(file.mimetype)) {
     return callback(
-      new Error(
-        "Only JPEG, PNG, WebP, and GIF images are allowed.",
-      ),
+      new Error("Only JPEG, PNG, WebP, and GIF images are allowed."),
       false,
     );
   }
@@ -27,9 +25,21 @@ const fileFilter = (req, file, callback) => {
 const upload = multer({
   storage,
   fileFilter,
+
   limits: {
     fileSize: MAX_FILE_SIZE,
-    files: 1,
+
+    /*
+     * Global cap on files per request.
+     *
+     * This must be >= the largest .array(field, n) used
+     * anywhere this shared instance is mounted (currently
+     * mortality's upload.array("images", 5)). Routes using
+     * upload.single(fieldname) (gallery, settings) are
+     * unaffected — .single() already restricts those to
+     * exactly 1 file regardless of this value.
+     */
+    files: 5,
   },
 });
 

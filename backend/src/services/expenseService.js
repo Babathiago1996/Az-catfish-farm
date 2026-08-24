@@ -6,6 +6,11 @@ const {
   notifyExpenseCreated,
 } = require("../services/notificationAutomationService");
 
+const {
+  uploadImageBuffer,
+  deleteCloudinaryImage,
+} = require("../utils/cloudinaryUpload");
+
 const LAGOS_TIMEZONE = "Africa/Lagos";
 
 /*
@@ -126,13 +131,35 @@ const roundMoney = (value) => {
 };
 
 /**
+ * Upload a single receipt image to Cloudinary.
+ *
+ * Returns { url, publicId } or null when there is
+ * no file to upload (the receipt image is optional).
+ */
+const uploadReceiptImage = async (file) => {
+  if (!file) {
+    return null;
+  }
+
+  return uploadImageBuffer(file.buffer, {
+    folder: "az-fish-farm/expenses",
+  });
+};
+
+/**
  * Create a new expense.
  */
-const createExpense = async ({ data, ipAddress, userAgent }) => {
+const createExpense = async ({ data, file, ipAddress, userAgent }) => {
   const session = await mongoose.startSession();
+
+  let uploadedImage = null;
 
   try {
     let createdExpense = null;
+
+    if (file) {
+      uploadedImage = await uploadReceiptImage(file);
+    }
 
     await session.withTransaction(async () => {
       const expense = await Expense.create(
@@ -152,7 +179,9 @@ const createExpense = async ({ data, ipAddress, userAgent }) => {
 
             notes: data.notes || "",
 
-            receiptImage: data.receiptImage || "",
+            receiptImage: uploadedImage?.url || "",
+
+            receiptImagePublicId: uploadedImage?.publicId || "",
           },
         ],
         {
@@ -209,6 +238,16 @@ const createExpense = async ({ data, ipAddress, userAgent }) => {
     });
 
     return createdExpense.toObject();
+  } catch (error) {
+    if (uploadedImage?.publicId) {
+      await deleteCloudinaryImage(uploadedImage.publicId).catch(
+        (cleanupError) => {
+          console.error("Receipt image cleanup failed:", cleanupError);
+        },
+      );
+    }
+
+    throw error;
   } finally {
     await session.endSession();
   }
@@ -329,12 +368,7 @@ const getExpenseById = async (id) => {
 /**
  * Update an expense.
  */
-const updateExpense = async ({
-  id,
-  data,
-  ipAddress,
-  userAgent,
-}) => {
+const updateExpense = async ({ id, data, file, ipAddress, userAgent }) => {
   if (!mongoose.isValidObjectId(id)) {
     return {
       success: false,
@@ -344,8 +378,14 @@ const updateExpense = async ({
 
   const session = await mongoose.startSession();
 
+  let uploadedImage = null;
+
   try {
     let updatedExpense = null;
+
+    if (file) {
+      uploadedImage = await uploadReceiptImage(file);
+    }
 
     await session.withTransaction(async () => {
       const expense = await Expense.findById(id).session(session);
@@ -358,6 +398,8 @@ const updateExpense = async ({
         throw error;
       }
 
+      const oldPublicId = expense.receiptImagePublicId || "";
+
       const allowedFields = [
         "category",
         "description",
@@ -366,7 +408,6 @@ const updateExpense = async ({
         "vendor",
         "reference",
         "notes",
-        "receiptImage",
       ];
 
       allowedFields.forEach((field) => {
@@ -379,9 +420,28 @@ const updateExpense = async ({
         expense.amount = roundMoney(data.amount);
       }
 
+      if (uploadedImage?.url) {
+        expense.receiptImage = uploadedImage.url;
+        expense.receiptImagePublicId = uploadedImage.publicId || "";
+      } else if (data.removeReceiptImage) {
+        expense.receiptImage = "";
+        expense.receiptImagePublicId = "";
+      }
+
       await expense.save({
         session,
       });
+
+      /*
+       * Clean up the old Cloudinary asset once the new
+       * state has been saved successfully, whether it was
+       * replaced by a new upload or explicitly removed.
+       */
+      if (oldPublicId && (uploadedImage?.publicId || data.removeReceiptImage)) {
+        await deleteCloudinaryImage(oldPublicId).catch((cleanupError) => {
+          console.error("Unable to delete old receipt image:", cleanupError);
+        });
+      }
 
       await ActivityLog.create(
         [
@@ -427,6 +487,17 @@ const updateExpense = async ({
       expense: updatedExpense,
     };
   } catch (error) {
+    if (uploadedImage?.publicId) {
+      await deleteCloudinaryImage(uploadedImage.publicId).catch(
+        (cleanupError) => {
+          console.error(
+            "Receipt image replacement cleanup failed:",
+            cleanupError,
+          );
+        },
+      );
+    }
+
     if (error.code === "NOT_FOUND") {
       return {
         success: false,
@@ -443,11 +514,7 @@ const updateExpense = async ({
 /**
  * Delete an expense.
  */
-const deleteExpense = async ({
-  id,
-  ipAddress,
-  userAgent,
-}) => {
+const deleteExpense = async ({ id, ipAddress, userAgent }) => {
   if (!mongoose.isValidObjectId(id)) {
     return {
       success: false,
@@ -512,6 +579,14 @@ const deleteExpense = async ({
           session,
         },
       );
+
+      if (expense.receiptImagePublicId) {
+        await deleteCloudinaryImage(expense.receiptImagePublicId).catch(
+          (cleanupError) => {
+            console.error("Unable to delete receipt image:", cleanupError);
+          },
+        );
+      }
     });
 
     return {
@@ -550,160 +625,157 @@ const getExpenseSummary = async ({ from, to, category }) => {
     match.category = category;
   }
 
-  const [totals, byCategory, byMonth, byDay] =
-    await Promise.all([
-      Expense.aggregate([
-        {
-          $match: match,
-        },
+  const [totals, byCategory, byMonth, byDay] = await Promise.all([
+    Expense.aggregate([
+      {
+        $match: match,
+      },
 
-        {
-          $group: {
-            _id: null,
+      {
+        $group: {
+          _id: null,
 
-            totalExpenses: {
-              $sum: "$amount",
-            },
+          totalExpenses: {
+            $sum: "$amount",
+          },
 
-            expenseCount: {
-              $sum: 1,
-            },
+          expenseCount: {
+            $sum: 1,
           },
         },
-      ]),
+      },
+    ]),
 
-      Expense.aggregate([
-        {
-          $match: match,
-        },
+    Expense.aggregate([
+      {
+        $match: match,
+      },
 
-        {
-          $group: {
-            _id: "$category",
+      {
+        $group: {
+          _id: "$category",
 
-            amount: {
-              $sum: "$amount",
-            },
+          amount: {
+            $sum: "$amount",
+          },
 
-            count: {
-              $sum: 1,
-            },
+          count: {
+            $sum: 1,
           },
         },
+      },
 
-        {
-          $sort: {
-            amount: -1,
-          },
+      {
+        $sort: {
+          amount: -1,
         },
+      },
 
-        {
-          $project: {
-            _id: 0,
+      {
+        $project: {
+          _id: 0,
 
-            category: "$_id",
+          category: "$_id",
 
-            amount: 1,
+          amount: 1,
 
-            count: 1,
-          },
+          count: 1,
         },
-      ]),
+      },
+    ]),
 
-      Expense.aggregate([
-        {
-          $match: match,
-        },
+    Expense.aggregate([
+      {
+        $match: match,
+      },
 
-        {
-          $group: {
-            _id: {
-              year: {
-                $year: {
-                  date: "$expenseDate",
-                  timezone: LAGOS_TIMEZONE,
-                },
-              },
-
-              month: {
-                $month: {
-                  date: "$expenseDate",
-                  timezone: LAGOS_TIMEZONE,
-                },
-              },
-            },
-
-            amount: {
-              $sum: "$amount",
-            },
-          },
-        },
-
-        {
-          $sort: {
-            "_id.year": 1,
-            "_id.month": 1,
-          },
-        },
-
-        {
-          $project: {
-            _id: 0,
-
-            year: "$_id.year",
-
-            month: "$_id.month",
-
-            amount: 1,
-          },
-        },
-      ]),
-
-      Expense.aggregate([
-        {
-          $match: match,
-        },
-
-        {
-          $group: {
-            _id: {
-              $dateToString: {
-                format: "%Y-%m-%d",
-
+      {
+        $group: {
+          _id: {
+            year: {
+              $year: {
                 date: "$expenseDate",
-
                 timezone: LAGOS_TIMEZONE,
               },
             },
 
-            amount: {
-              $sum: "$amount",
+            month: {
+              $month: {
+                date: "$expenseDate",
+                timezone: LAGOS_TIMEZONE,
+              },
             },
           },
-        },
 
-        {
-          $sort: {
-            _id: 1,
+          amount: {
+            $sum: "$amount",
           },
         },
+      },
 
-        {
-          $project: {
-            _id: 0,
+      {
+        $sort: {
+          "_id.year": 1,
+          "_id.month": 1,
+        },
+      },
 
-            date: "$_id",
+      {
+        $project: {
+          _id: 0,
 
-            amount: 1,
+          year: "$_id.year",
+
+          month: "$_id.month",
+
+          amount: 1,
+        },
+      },
+    ]),
+
+    Expense.aggregate([
+      {
+        $match: match,
+      },
+
+      {
+        $group: {
+          _id: {
+            $dateToString: {
+              format: "%Y-%m-%d",
+
+              date: "$expenseDate",
+
+              timezone: LAGOS_TIMEZONE,
+            },
+          },
+
+          amount: {
+            $sum: "$amount",
           },
         },
-      ]),
-    ]);
+      },
+
+      {
+        $sort: {
+          _id: 1,
+        },
+      },
+
+      {
+        $project: {
+          _id: 0,
+
+          date: "$_id",
+
+          amount: 1,
+        },
+      },
+    ]),
+  ]);
 
   return {
-    totalExpenses: roundMoney(
-      totals[0]?.totalExpenses || 0,
-    ),
+    totalExpenses: roundMoney(totals[0]?.totalExpenses || 0),
 
     expenseCount: totals[0]?.expenseCount || 0,
 
@@ -751,25 +823,16 @@ const getMonthlyExpenses = async (year, month) => {
 
   const monthString = String(numericMonth).padStart(2, "0");
 
-  const firstDay = new Date(
-    `${numericYear}-${monthString}-01T00:00:00+01:00`,
-  );
+  const firstDay = new Date(`${numericYear}-${monthString}-01T00:00:00+01:00`);
 
   const nextMonth =
     numericMonth === 12
       ? `${numericYear + 1}-01`
-      : `${numericYear}-${String(numericMonth + 1).padStart(
-          2,
-          "0",
-        )}`;
+      : `${numericYear}-${String(numericMonth + 1).padStart(2, "0")}`;
 
-  const lastDay = new Date(
-    `${nextMonth}-01T00:00:00+01:00`,
-  );
+  const lastDay = new Date(`${nextMonth}-01T00:00:00+01:00`);
 
-  lastDay.setMilliseconds(
-    lastDay.getMilliseconds() - 1,
-  );
+  lastDay.setMilliseconds(lastDay.getMilliseconds() - 1);
 
   return getExpenseSummary({
     from: firstDay,

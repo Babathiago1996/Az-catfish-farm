@@ -12,90 +12,91 @@ const expenseSchema = new mongoose.Schema(
         "repairs",
         "transportation",
         "utilities",
-        "other"
+        "other",
       ],
       required: true,
-      index: true
+      index: true,
     },
 
     description: {
       type: String,
       required: true,
       trim: true,
-      maxlength: 300
+      maxlength: 300,
     },
 
     amount: {
       type: Number,
       required: true,
-      min: 0
+      min: 0,
     },
 
     expenseDate: {
       type: Date,
       required: true,
       default: Date.now,
-      index: true
+      index: true,
     },
 
     vendor: {
       type: String,
       trim: true,
       maxlength: 150,
-      default: ""
+      default: "",
     },
 
     reference: {
       type: String,
       trim: true,
       maxlength: 100,
-      default: ""
+      default: "",
     },
 
     notes: {
       type: String,
       trim: true,
       maxlength: 2000,
-      default: ""
+      default: "",
     },
 
     receiptImage: {
       type: String,
       trim: true,
-      default: ""
-    }
+      default: "",
+    },
+
+    /*
+     * Cloudinary public ID for the uploaded receipt
+     * image, kept so we can delete the asset from
+     * Cloudinary when it's replaced or the expense
+     * is removed.
+     */
+    receiptImagePublicId: {
+      type: String,
+      trim: true,
+      default: "",
+    },
   },
   {
-    timestamps: true
-  }
+    timestamps: true,
+  },
 );
 
 expenseSchema.index({
-  expenseDate: -1
+  expenseDate: -1,
 });
 
 expenseSchema.index({
   category: 1,
-  expenseDate: -1
+  expenseDate: -1,
 });
 
-expenseSchema.pre(
-  "save",
-  function (next) {
-    if (
-      this.amount !== undefined &&
-      this.amount !== null
-    ) {
-      this.amount = Number(
-        Number(this.amount).toFixed(2)
-      );
-    }
-
-    next();
+expenseSchema.pre("save", function (next) {
+  if (this.amount !== undefined && this.amount !== null) {
+    this.amount = Number(Number(this.amount).toFixed(2));
   }
-);
 
-module.exports = mongoose.model(
-  "Expense",
-  expenseSchema
-);
+  next();
+});
+
+module.exports = mongoose.model("Expense", expenseSchema);

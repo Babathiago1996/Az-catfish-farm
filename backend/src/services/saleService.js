@@ -71,10 +71,7 @@ const calculateTotalAmount = (
   averageWeight,
   pricePerKilogram,
 ) => {
-  const totalWeightKg = calculateTotalWeight(
-    quantitySold,
-    averageWeight,
-  );
+  const totalWeightKg = calculateTotalWeight(quantitySold, averageWeight);
 
   const price = Number(pricePerKilogram);
 
@@ -85,11 +82,7 @@ const calculateTotalAmount = (
   return Number((totalWeightKg * price).toFixed(2));
 };
 
-const calculateBalanceDue = (
-  totalAmount,
-  amountPaid,
-  paymentStatus,
-) => {
+const calculateBalanceDue = (totalAmount, amountPaid, paymentStatus) => {
   if (paymentStatus === "cancelled") {
     return 0;
   }
@@ -97,16 +90,10 @@ const calculateBalanceDue = (
   const total = Number(totalAmount) || 0;
   const paid = Number(amountPaid) || 0;
 
-  return Number(
-    Math.max(total - paid, 0).toFixed(2),
-  );
+  return Number(Math.max(total - paid, 0).toFixed(2));
 };
 
-const normalizePaymentStatus = ({
-  paymentStatus,
-  amountPaid,
-  totalAmount,
-}) => {
+const normalizePaymentStatus = ({ paymentStatus, amountPaid, totalAmount }) => {
   if (paymentStatus === "cancelled") {
     return "cancelled";
   }
@@ -145,11 +132,7 @@ const getPond = async (pondId, session = null) => {
   return query;
 };
 
-const deductPondStock = async ({
-  pondId,
-  quantity,
-  session,
-}) => {
+const deductPondStock = async ({ pondId, quantity, session }) => {
   const safeQuantity = Number(quantity);
 
   if (
@@ -188,10 +171,7 @@ const deductPondStock = async ({
     };
   }
 
-  const existingPond = await getPond(
-    pondId,
-    session,
-  );
+  const existingPond = await getPond(pondId, session);
 
   if (!existingPond) {
     return {
@@ -206,11 +186,7 @@ const deductPondStock = async ({
   };
 };
 
-const restorePondStock = async ({
-  pondId,
-  quantity,
-  session,
-}) => {
+const restorePondStock = async ({ pondId, quantity, session }) => {
   const safeQuantity = Number(quantity);
 
   if (
@@ -243,61 +219,38 @@ const restorePondStock = async ({
 |--------------------------------------------------------------------------
 */
 
-const createSale = async ({
-  data,
-  ipAddress,
-  userAgent,
-}) => {
+const createSale = async ({ data, ipAddress, userAgent }) => {
   const session = await mongoose.startSession();
 
   let createdSaleId = null;
 
   try {
     await session.withTransaction(async () => {
-      const pond = await getPond(
-        data.pond,
-        session,
-      );
+      const pond = await getPond(data.pond, session);
 
       if (!pond) {
-        const error = new Error(
-          "The selected pond was not found.",
-        );
+        const error = new Error("The selected pond was not found.");
 
         error.code = "POND_NOT_FOUND";
 
         throw error;
       }
 
-      const quantitySold = Number(
-        data.quantitySold,
-      );
+      const quantitySold = Number(data.quantitySold);
 
-      const averageWeight = Number(
-        data.averageWeight,
-      );
+      const averageWeight = Number(data.averageWeight);
 
-      const pricePerKilogram = Number(
-        data.pricePerKilogram,
-      );
+      const pricePerKilogram = Number(data.pricePerKilogram);
 
-      if (
-        !Number.isFinite(quantitySold) ||
-        quantitySold <= 0
-      ) {
-        const error = new Error(
-          "Quantity sold must be greater than zero.",
-        );
+      if (!Number.isFinite(quantitySold) || quantitySold <= 0) {
+        const error = new Error("Quantity sold must be greater than zero.");
 
         error.code = "INVALID_QUANTITY";
 
         throw error;
       }
 
-      if (
-        !Number.isFinite(averageWeight) ||
-        averageWeight <= 0
-      ) {
+      if (!Number.isFinite(averageWeight) || averageWeight <= 0) {
         const error = new Error(
           "Average fish weight must be greater than zero.",
         );
@@ -307,38 +260,25 @@ const createSale = async ({
         throw error;
       }
 
-      if (
-        !Number.isFinite(pricePerKilogram) ||
-        pricePerKilogram < 0
-      ) {
-        const error = new Error(
-          "Price per kilogram cannot be negative.",
-        );
+      if (!Number.isFinite(pricePerKilogram) || pricePerKilogram < 0) {
+        const error = new Error("Price per kilogram cannot be negative.");
 
         error.code = "INVALID_PRICE";
         throw error;
       }
 
-      const totalWeight =
-        calculateTotalWeight(
-          quantitySold,
-          averageWeight,
-        );
+      const totalWeight = calculateTotalWeight(quantitySold, averageWeight);
 
-      const totalAmount =
-        calculateTotalAmount(
-          quantitySold,
-          averageWeight,
-          pricePerKilogram,
-        );
+      const totalAmount = calculateTotalAmount(
+        quantitySold,
+        averageWeight,
+        pricePerKilogram,
+      );
 
-      const amountPaid =
-        Number(data.amountPaid) || 0;
+      const amountPaid = Number(data.amountPaid) || 0;
 
       if (amountPaid < 0) {
-        const error = new Error(
-          "Amount paid cannot be negative.",
-        );
+        const error = new Error("Amount paid cannot be negative.");
 
         error.code = "INVALID_AMOUNT_PAID";
 
@@ -350,119 +290,96 @@ const createSale = async ({
           "Amount paid cannot exceed the total sale amount.",
         );
 
-        error.code =
-          "PAYMENT_EXCEEDS_TOTAL";
+        error.code = "PAYMENT_EXCEEDS_TOTAL";
 
         throw error;
       }
 
-      const paymentStatus =
-        normalizePaymentStatus({
-          paymentStatus:
-            data.paymentStatus,
-          amountPaid,
-          totalAmount,
-        });
+      const paymentStatus = normalizePaymentStatus({
+        paymentStatus: data.paymentStatus,
+        amountPaid,
+        totalAmount,
+      });
 
       /*
        * A cancelled sale cannot have
        * money recorded against it.
        */
-      if (
-        paymentStatus === "cancelled" &&
-        amountPaid > 0
-      ) {
+      if (paymentStatus === "cancelled" && amountPaid > 0) {
         const error = new Error(
           "A sale with payment received cannot be cancelled until the payment is handled.",
         );
 
-        error.code =
-          "CANNOT_CANCEL_PAID_SALE";
+        error.code = "CANNOT_CANCEL_PAID_SALE";
 
         throw error;
       }
 
-      const balanceDue =
-        calculateBalanceDue(
-          totalAmount,
-          amountPaid,
-          paymentStatus,
-        );
+      const balanceDue = calculateBalanceDue(
+        totalAmount,
+        amountPaid,
+        paymentStatus,
+      );
 
       /*
        * Active sales consume fish.
        */
-      if (
-        paymentStatus !== "cancelled"
-      ) {
-        const stockResult =
-          await deductPondStock({
-            pondId: data.pond,
-            quantity: quantitySold,
-            session,
-          });
+      if (paymentStatus !== "cancelled") {
+        const stockResult = await deductPondStock({
+          pondId: data.pond,
+          quantity: quantitySold,
+          session,
+        });
 
         if (!stockResult.success) {
-          const error = new Error(
-            stockResult.reason,
-          );
+          const error = new Error(stockResult.reason);
 
-          error.code =
-            stockResult.reason;
+          error.code = stockResult.reason;
 
           throw error;
         }
       }
 
-      const invoiceNumber =
-        await generateInvoiceNumber();
+      const invoiceNumber = await generateInvoiceNumber();
 
-      const [sale] =
-        await Sale.create(
-          [
-            {
-              invoiceNumber,
-
-              saleDate:
-                data.saleDate ||
-                new Date(),
-
-              pond: data.pond,
-
-              customerName:
-                data.customerName,
-
-              phoneNumber:
-                data.phoneNumber || "",
-
-              quantitySold,
-
-              averageWeight,
-
-              totalWeight,
-
-              pricePerKilogram,
-
-              totalAmount,
-
-              paymentStatus,
-
-              amountPaid,
-
-              balanceDue,
-
-              paymentMethod:
-                data.paymentMethod ||
-                "cash",
-
-              notes:
-                data.notes || "",
-            },
-          ],
+      const [sale] = await Sale.create(
+        [
           {
-            session,
+            invoiceNumber,
+
+            saleDate: data.saleDate || new Date(),
+
+            pond: data.pond,
+
+            customerName: data.customerName,
+
+            phoneNumber: data.phoneNumber || "",
+
+            quantitySold,
+
+            averageWeight,
+
+            totalWeight,
+
+            pricePerKilogram,
+
+            totalAmount,
+
+            paymentStatus,
+
+            amountPaid,
+
+            balanceDue,
+
+            paymentMethod: data.paymentMethod || "cash",
+
+            notes: data.notes || "",
           },
-        );
+        ],
+        {
+          session,
+        },
+      );
 
       await ActivityLog.create(
         [
@@ -476,41 +393,30 @@ const createSale = async ({
             description: `Sale ${sale.invoiceNumber} was recorded.`,
 
             metadata: {
-              invoiceNumber:
-                sale.invoiceNumber,
+              invoiceNumber: sale.invoiceNumber,
 
-              customerName:
-                sale.customerName,
+              customerName: sale.customerName,
 
               pondId: sale.pond,
 
-              quantitySold:
-                sale.quantitySold,
+              quantitySold: sale.quantitySold,
 
-              totalWeight:
-                sale.totalWeight,
+              totalWeight: sale.totalWeight,
 
-              totalAmount:
-                sale.totalAmount,
+              totalAmount: sale.totalAmount,
 
-              amountPaid:
-                sale.amountPaid,
+              amountPaid: sale.amountPaid,
 
-              balanceDue:
-                sale.balanceDue,
+              balanceDue: sale.balanceDue,
 
-              paymentStatus:
-                sale.paymentStatus,
+              paymentStatus: sale.paymentStatus,
 
-              paymentMethod:
-                sale.paymentMethod,
+              paymentMethod: sale.paymentMethod,
             },
 
-            ipAddress:
-              ipAddress || "",
+            ipAddress: ipAddress || "",
 
-            userAgent:
-              userAgent || "",
+            userAgent: userAgent || "",
           },
         ],
         {
@@ -518,23 +424,19 @@ const createSale = async ({
         },
       );
 
-      createdSaleId =
-        sale._id;
+      createdSaleId = sale._id;
     });
 
     /*
      * Transaction has successfully
      * committed at this point.
      */
-    const populatedSale =
-      await Sale.findById(
-        createdSaleId,
+    const populatedSale = await Sale.findById(createdSaleId)
+      .populate(
+        "pond",
+        "name pondName pondNumber pondType pondSize currentFishCount currentAverageWeight waterSource status",
       )
-        .populate(
-          "pond",
-          "name pondName pondNumber pondType pondSize currentFishCount currentAverageWeight waterSource status",
-        )
-        .lean();
+      .lean();
 
     /*
      * Notifications are deliberately
@@ -548,10 +450,7 @@ const createSale = async ({
         sale: populatedSale,
       });
     } catch (notificationError) {
-      console.error(
-        "Sale notification failed:",
-        notificationError.message,
-      );
+      console.error("Sale notification failed:", notificationError.message);
     }
 
     return {
@@ -559,90 +458,59 @@ const createSale = async ({
       sale: populatedSale,
     };
   } catch (error) {
-    if (
-      error.code ===
-      "POND_NOT_FOUND"
-    ) {
+    if (error.code === "POND_NOT_FOUND") {
       return {
         success: false,
         reason: "POND_NOT_FOUND",
       };
     }
 
-    if (
-      error.code ===
-      "QUANTITY_EXCEEDS_STOCK"
-    ) {
+    if (error.code === "QUANTITY_EXCEEDS_STOCK") {
       return {
         success: false,
-        reason:
-          "QUANTITY_EXCEEDS_STOCK",
+        reason: "QUANTITY_EXCEEDS_STOCK",
       };
     }
 
-    if (
-      error.code ===
-      "PAYMENT_EXCEEDS_TOTAL"
-    ) {
+    if (error.code === "PAYMENT_EXCEEDS_TOTAL") {
       return {
         success: false,
-        reason:
-          "PAYMENT_EXCEEDS_TOTAL",
+        reason: "PAYMENT_EXCEEDS_TOTAL",
       };
     }
 
-    if (
-      error.code ===
-      "CANNOT_CANCEL_PAID_SALE"
-    ) {
+    if (error.code === "CANNOT_CANCEL_PAID_SALE") {
       return {
         success: false,
-        reason:
-          "CANNOT_CANCEL_PAID_SALE",
+        reason: "CANNOT_CANCEL_PAID_SALE",
       };
     }
 
-    if (
-      error.code ===
-      "INVALID_QUANTITY"
-    ) {
+    if (error.code === "INVALID_QUANTITY") {
       return {
         success: false,
-        reason:
-          "INVALID_QUANTITY",
+        reason: "INVALID_QUANTITY",
       };
     }
 
-    if (
-      error.code ===
-      "INVALID_AVERAGE_WEIGHT"
-    ) {
+    if (error.code === "INVALID_AVERAGE_WEIGHT") {
       return {
         success: false,
-        reason:
-          "INVALID_AVERAGE_WEIGHT",
+        reason: "INVALID_AVERAGE_WEIGHT",
       };
     }
 
-    if (
-      error.code ===
-      "INVALID_PRICE"
-    ) {
+    if (error.code === "INVALID_PRICE") {
       return {
         success: false,
-        reason:
-          "INVALID_PRICE",
+        reason: "INVALID_PRICE",
       };
     }
 
-    if (
-      error.code ===
-      "INVALID_AMOUNT_PAID"
-    ) {
+    if (error.code === "INVALID_AMOUNT_PAID") {
       return {
         success: false,
-        reason:
-          "INVALID_AMOUNT_PAID",
+        reason: "INVALID_AMOUNT_PAID",
       };
     }
 
@@ -667,20 +535,9 @@ const listSales = async ({
   page = 1,
   limit = 30,
 }) => {
-  const currentPage =
-    Math.max(
-      Number(page) || 1,
-      1,
-    );
+  const currentPage = Math.max(Number(page) || 1, 1);
 
-  const pageSize =
-    Math.min(
-      Math.max(
-        Number(limit) || 30,
-        1,
-      ),
-      100,
-    );
+  const pageSize = Math.min(Math.max(Number(limit) || 30, 1), 100);
 
   const filter = {};
 
@@ -689,8 +546,7 @@ const listSales = async ({
   }
 
   if (paymentStatus) {
-    filter.paymentStatus =
-      paymentStatus;
+    filter.paymentStatus = paymentStatus;
   }
 
   if (from || to) {
@@ -700,8 +556,7 @@ const listSales = async ({
       const start = startOfDay(from);
 
       if (start) {
-        filter.saleDate.$gte =
-          start;
+        filter.saleDate.$gte = start;
       }
     }
 
@@ -709,48 +564,37 @@ const listSales = async ({
       const end = endOfDay(to);
 
       if (end) {
-        filter.saleDate.$lte =
-          end;
+        filter.saleDate.$lte = end;
       }
     }
   }
 
   if (search) {
-    const escapedSearch =
-      String(search).replace(
-        /[.*+?^${}()|[\]\\]/g,
-        "\\$&",
-      );
+    const escapedSearch = String(search).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
     filter.$or = [
       {
         customerName: {
-          $regex:
-            escapedSearch,
+          $regex: escapedSearch,
           $options: "i",
         },
       },
       {
         phoneNumber: {
-          $regex:
-            escapedSearch,
+          $regex: escapedSearch,
           $options: "i",
         },
       },
       {
         invoiceNumber: {
-          $regex:
-            escapedSearch,
+          $regex: escapedSearch,
           $options: "i",
         },
       },
     ];
   }
 
-  const [
-    sales,
-    total,
-  ] = await Promise.all([
+  const [sales, total] = await Promise.all([
     Sale.find(filter)
       .populate(
         "pond",
@@ -760,10 +604,7 @@ const listSales = async ({
         saleDate: -1,
         createdAt: -1,
       })
-      .skip(
-        (currentPage - 1) *
-          pageSize,
-      )
+      .skip((currentPage - 1) * pageSize)
       .limit(pageSize)
       .lean(),
 
@@ -780,9 +621,7 @@ const listSales = async ({
 
       total,
 
-      pages: Math.ceil(
-        total / pageSize,
-      ),
+      pages: Math.ceil(total / pageSize),
     },
   };
 };
@@ -793,12 +632,8 @@ const listSales = async ({
 |--------------------------------------------------------------------------
 */
 
-const getSaleById = async (
-  id,
-) => {
-  if (
-    !mongoose.isValidObjectId(id)
-  ) {
+const getSaleById = async (id) => {
+  if (!mongoose.isValidObjectId(id)) {
     return null;
   }
 
@@ -816,581 +651,366 @@ const getSaleById = async (
 |--------------------------------------------------------------------------
 */
 
-const updateSale = async ({
-  id,
-  data,
-  ipAddress,
-  userAgent,
-}) => {
-  if (
-    !mongoose.isValidObjectId(id)
-  ) {
+const updateSale = async ({ id, data, ipAddress, userAgent }) => {
+  if (!mongoose.isValidObjectId(id)) {
     return {
       success: false,
       reason: "NOT_FOUND",
     };
   }
 
-  const session =
-    await mongoose.startSession();
+  const session = await mongoose.startSession();
 
   try {
     let updatedSale = null;
 
-    await session.withTransaction(
-      async () => {
-        const sale =
-          await Sale.findById(id)
-            .session(session);
-
-        if (!sale) {
-          const error =
-            new Error(
-              "Sale not found.",
-            );
-
-          error.code =
-            "NOT_FOUND";
-
-          throw error;
-        }
-
-        const originalPondId =
-          String(sale.pond);
-
-        const originalQuantity =
-          Number(
-            sale.quantitySold,
-          );
-
-        const originalStatus =
-          sale.paymentStatus;
-
-        const nextPondId =
-          data.pond !== undefined
-            ? String(data.pond)
-            : originalPondId;
-
-        const nextQuantity =
-          data.quantitySold !==
-          undefined
-            ? Number(
-                data.quantitySold,
-              )
-            : originalQuantity;
-
-        const nextWeight =
-          data.averageWeight !==
-          undefined
-            ? Number(
-                data.averageWeight,
-              )
-            : Number(
-                sale.averageWeight,
-              );
-
-        const nextPrice =
-          data.pricePerKilogram !==
-          undefined
-            ? Number(
-                data.pricePerKilogram,
-              )
-            : Number(
-                sale.pricePerKilogram,
-              );
-
-        if (
-          !Number.isFinite(
-            nextQuantity,
-          ) ||
-          nextQuantity <= 0
-        ) {
-          const error =
-            new Error(
-              "Quantity sold must be greater than zero.",
-            );
-
-          error.code =
-            "INVALID_QUANTITY";
-
-          throw error;
-        }
-
-        if (
-          !Number.isFinite(
-            nextWeight,
-          ) ||
-          nextWeight <= 0
-        ) {
-          const error =
-            new Error(
-              "Average fish weight must be greater than zero.",
-            );
-
-          error.code =
-            "INVALID_AVERAGE_WEIGHT";
-
-          throw error;
-        }
-
-        if (
-          !Number.isFinite(
-            nextPrice,
-          ) ||
-          nextPrice < 0
-        ) {
-          const error =
-            new Error(
-              "Price per kilogram cannot be negative.",
-            );
-
-          error.code =
-            "INVALID_PRICE";
-
-          throw error;
-        }
-
-        if (
-          !mongoose.isValidObjectId(
-            nextPondId,
-          )
-        ) {
-          const error =
-            new Error(
-              "The selected pond was not found.",
-            );
-
-          error.code =
-            "POND_NOT_FOUND";
-
-          throw error;
-        }
-
-        const nextTotalWeight =
-          calculateTotalWeight(
-            nextQuantity,
-            nextWeight,
-          );
-
-        const nextTotalAmount =
-          calculateTotalAmount(
-            nextQuantity,
-            nextWeight,
-            nextPrice,
-          );
-
-        const nextAmountPaid =
-          data.amountPaid !==
-          undefined
-            ? Number(
-                data.amountPaid,
-              )
-            : Number(
-                sale.amountPaid ||
-                  0,
-              );
-
-        if (
-          !Number.isFinite(
-            nextAmountPaid,
-          ) ||
-          nextAmountPaid < 0
-        ) {
-          const error =
-            new Error(
-              "Amount paid cannot be negative.",
-            );
-
-          error.code =
-            "INVALID_AMOUNT_PAID";
-
-          throw error;
-        }
-
-        if (
-          nextAmountPaid >
-          nextTotalAmount
-        ) {
-          const error =
-            new Error(
-              "Amount paid cannot exceed the updated sale amount.",
-            );
-
-          error.code =
-            "PAYMENT_EXCEEDS_TOTAL";
-
-          throw error;
-        }
-
-        const nextStatus =
-          normalizePaymentStatus({
-            paymentStatus:
-              data.paymentStatus !==
-              undefined
-                ? data.paymentStatus
-                : originalStatus,
-
-            amountPaid:
-              nextAmountPaid,
-
-            totalAmount:
-              nextTotalAmount,
-          });
-
-        if (
-          nextStatus ===
-            "cancelled" &&
-          nextAmountPaid > 0
-        ) {
-          const error =
-            new Error(
-              "A sale with payment received cannot be cancelled until the payment is handled.",
-            );
-
-          error.code =
-            "CANNOT_CANCEL_PAID_SALE";
-
-          throw error;
-        }
-
-        const nextBalanceDue =
-          calculateBalanceDue(
-            nextTotalAmount,
-            nextAmountPaid,
-            nextStatus,
-          );
-
-        const oldActive =
-          originalStatus !==
-          "cancelled";
-
-        const newActive =
-          nextStatus !==
-          "cancelled";
-
-        /*
-         * Restore original stock first.
-         *
-         * The transaction guarantees
-         * rollback if anything below fails.
-         */
-        if (
-          oldActive &&
-          originalQuantity > 0
-        ) {
-          const restoredPond =
-            await restorePondStock({
-              pondId:
-                originalPondId,
-
-              quantity:
-                originalQuantity,
-
-              session,
-            });
-
-          if (!restoredPond) {
-            const error =
-              new Error(
-                "The original pond was not found.",
-              );
-
-            error.code =
-              "POND_NOT_FOUND";
-
-            throw error;
-          }
-        }
-
-        /*
-         * Ensure the new pond exists.
-         */
-        const nextPond =
-          await getPond(
-            nextPondId,
-            session,
-          );
-
-        if (!nextPond) {
-          const error =
-            new Error(
-              "The selected pond was not found.",
-            );
-
-          error.code =
-            "POND_NOT_FOUND";
-
-          throw error;
-        }
-
-        /*
-         * Deduct the new quantity
-         * if the updated sale remains active.
-         */
-        if (
-          newActive &&
-          nextQuantity > 0
-        ) {
-          const stockResult =
-            await deductPondStock({
-              pondId:
-                nextPondId,
-
-              quantity:
-                nextQuantity,
-
-              session,
-            });
-
-          if (!stockResult.success) {
-            const error =
-              new Error(
-                stockResult.reason,
-              );
-
-            error.code =
-              stockResult.reason;
-
-            throw error;
-          }
-        }
-
-        if (
-          data.customerName !==
-          undefined
-        ) {
-          sale.customerName =
-            data.customerName;
-        }
-
-        if (
-          data.phoneNumber !==
-          undefined
-        ) {
-          sale.phoneNumber =
-            data.phoneNumber;
-        }
-
-        sale.pond =
-          nextPondId;
-
-        sale.quantitySold =
-          nextQuantity;
-
-        sale.averageWeight =
-          nextWeight;
-
-        sale.totalWeight =
-          nextTotalWeight;
-
-        sale.pricePerKilogram =
-          nextPrice;
-
-        sale.totalAmount =
-          nextTotalAmount;
-
-        sale.amountPaid =
-          nextAmountPaid;
-
-        sale.balanceDue =
-          nextBalanceDue;
-
-        sale.paymentStatus =
-          nextStatus;
-
-        if (
-          data.paymentMethod !==
-          undefined
-        ) {
-          sale.paymentMethod =
-            data.paymentMethod;
-        }
-
-        if (
-          data.saleDate !==
-          undefined
-        ) {
-          sale.saleDate =
-            data.saleDate;
-        }
-
-        if (
-          data.notes !==
-          undefined
-        ) {
-          sale.notes =
-            data.notes;
-        }
-
-        await sale.save({
+    await session.withTransaction(async () => {
+      const sale = await Sale.findById(id).session(session);
+
+      if (!sale) {
+        const error = new Error("Sale not found.");
+
+        error.code = "NOT_FOUND";
+
+        throw error;
+      }
+
+      const originalPondId = String(sale.pond);
+
+      const originalQuantity = Number(sale.quantitySold);
+
+      const originalStatus = sale.paymentStatus;
+
+      const nextPondId =
+        data.pond !== undefined ? String(data.pond) : originalPondId;
+
+      const nextQuantity =
+        data.quantitySold !== undefined
+          ? Number(data.quantitySold)
+          : originalQuantity;
+
+      const nextWeight =
+        data.averageWeight !== undefined
+          ? Number(data.averageWeight)
+          : Number(sale.averageWeight);
+
+      const nextPrice =
+        data.pricePerKilogram !== undefined
+          ? Number(data.pricePerKilogram)
+          : Number(sale.pricePerKilogram);
+
+      if (!Number.isFinite(nextQuantity) || nextQuantity <= 0) {
+        const error = new Error("Quantity sold must be greater than zero.");
+
+        error.code = "INVALID_QUANTITY";
+
+        throw error;
+      }
+
+      if (!Number.isFinite(nextWeight) || nextWeight <= 0) {
+        const error = new Error(
+          "Average fish weight must be greater than zero.",
+        );
+
+        error.code = "INVALID_AVERAGE_WEIGHT";
+
+        throw error;
+      }
+
+      if (!Number.isFinite(nextPrice) || nextPrice < 0) {
+        const error = new Error("Price per kilogram cannot be negative.");
+
+        error.code = "INVALID_PRICE";
+
+        throw error;
+      }
+
+      if (!mongoose.isValidObjectId(nextPondId)) {
+        const error = new Error("The selected pond was not found.");
+
+        error.code = "POND_NOT_FOUND";
+
+        throw error;
+      }
+
+      const nextTotalWeight = calculateTotalWeight(nextQuantity, nextWeight);
+
+      const nextTotalAmount = calculateTotalAmount(
+        nextQuantity,
+        nextWeight,
+        nextPrice,
+      );
+
+      const nextAmountPaid =
+        data.amountPaid !== undefined
+          ? Number(data.amountPaid)
+          : Number(sale.amountPaid || 0);
+
+      if (!Number.isFinite(nextAmountPaid) || nextAmountPaid < 0) {
+        const error = new Error("Amount paid cannot be negative.");
+
+        error.code = "INVALID_AMOUNT_PAID";
+
+        throw error;
+      }
+
+      if (nextAmountPaid > nextTotalAmount) {
+        const error = new Error(
+          "Amount paid cannot exceed the updated sale amount.",
+        );
+
+        error.code = "PAYMENT_EXCEEDS_TOTAL";
+
+        throw error;
+      }
+
+      const nextStatus = normalizePaymentStatus({
+        paymentStatus:
+          data.paymentStatus !== undefined
+            ? data.paymentStatus
+            : originalStatus,
+
+        amountPaid: nextAmountPaid,
+
+        totalAmount: nextTotalAmount,
+      });
+
+      if (nextStatus === "cancelled" && nextAmountPaid > 0) {
+        const error = new Error(
+          "A sale with payment received cannot be cancelled until the payment is handled.",
+        );
+
+        error.code = "CANNOT_CANCEL_PAID_SALE";
+
+        throw error;
+      }
+
+      const nextBalanceDue = calculateBalanceDue(
+        nextTotalAmount,
+        nextAmountPaid,
+        nextStatus,
+      );
+
+      const oldActive = originalStatus !== "cancelled";
+
+      const newActive = nextStatus !== "cancelled";
+
+      /*
+       * Restore original stock first.
+       *
+       * The transaction guarantees
+       * rollback if anything below fails.
+       */
+      if (oldActive && originalQuantity > 0) {
+        const restoredPond = await restorePondStock({
+          pondId: originalPondId,
+
+          quantity: originalQuantity,
+
           session,
         });
 
-        await ActivityLog.create(
-          [
-            {
-              action: "update",
+        if (!restoredPond) {
+          const error = new Error("The original pond was not found.");
 
-              entityType: "Sale",
+          error.code = "POND_NOT_FOUND";
 
-              entityId:
-                sale._id,
+          throw error;
+        }
+      }
 
-              description: `Sale ${sale.invoiceNumber} was updated.`,
+      /*
+       * Ensure the new pond exists.
+       */
+      const nextPond = await getPond(nextPondId, session);
 
-              metadata: {
-                invoiceNumber:
-                  sale.invoiceNumber,
+      if (!nextPond) {
+        const error = new Error("The selected pond was not found.");
 
-                pondId:
-                  sale.pond,
+        error.code = "POND_NOT_FOUND";
 
-                quantitySold:
-                  sale.quantitySold,
+        throw error;
+      }
 
-                totalWeight:
-                  sale.totalWeight,
+      /*
+       * Deduct the new quantity
+       * if the updated sale remains active.
+       */
+      if (newActive && nextQuantity > 0) {
+        const stockResult = await deductPondStock({
+          pondId: nextPondId,
 
-                totalAmount:
-                  sale.totalAmount,
+          quantity: nextQuantity,
 
-                amountPaid:
-                  sale.amountPaid,
+          session,
+        });
 
-                balanceDue:
-                  sale.balanceDue,
+        if (!stockResult.success) {
+          const error = new Error(stockResult.reason);
 
-                paymentStatus:
-                  sale.paymentStatus,
+          error.code = stockResult.reason;
 
-                paymentMethod:
-                  sale.paymentMethod,
-              },
+          throw error;
+        }
+      }
 
-              ipAddress:
-                ipAddress || "",
+      if (data.customerName !== undefined) {
+        sale.customerName = data.customerName;
+      }
 
-              userAgent:
-                userAgent || "",
-            },
-          ],
+      if (data.phoneNumber !== undefined) {
+        sale.phoneNumber = data.phoneNumber;
+      }
+
+      sale.pond = nextPondId;
+
+      sale.quantitySold = nextQuantity;
+
+      sale.averageWeight = nextWeight;
+
+      sale.totalWeight = nextTotalWeight;
+
+      sale.pricePerKilogram = nextPrice;
+
+      sale.totalAmount = nextTotalAmount;
+
+      sale.amountPaid = nextAmountPaid;
+
+      sale.balanceDue = nextBalanceDue;
+
+      sale.paymentStatus = nextStatus;
+
+      if (data.paymentMethod !== undefined) {
+        sale.paymentMethod = data.paymentMethod;
+      }
+
+      if (data.saleDate !== undefined) {
+        sale.saleDate = data.saleDate;
+      }
+
+      if (data.notes !== undefined) {
+        sale.notes = data.notes;
+      }
+
+      await sale.save({
+        session,
+      });
+
+      await ActivityLog.create(
+        [
           {
-            session,
-          },
-        );
+            action: "update",
 
-        updatedSale =
-          await Sale.findById(
-            sale._id,
-          )
-            .populate(
-              "pond",
-              "name pondName pondNumber pondType pondSize currentFishCount currentAverageWeight waterSource status",
-            )
-            .session(session)
-            .lean();
-      },
-    );
+            entityType: "Sale",
+
+            entityId: sale._id,
+
+            description: `Sale ${sale.invoiceNumber} was updated.`,
+
+            metadata: {
+              invoiceNumber: sale.invoiceNumber,
+
+              pondId: sale.pond,
+
+              quantitySold: sale.quantitySold,
+
+              totalWeight: sale.totalWeight,
+
+              totalAmount: sale.totalAmount,
+
+              amountPaid: sale.amountPaid,
+
+              balanceDue: sale.balanceDue,
+
+              paymentStatus: sale.paymentStatus,
+
+              paymentMethod: sale.paymentMethod,
+            },
+
+            ipAddress: ipAddress || "",
+
+            userAgent: userAgent || "",
+          },
+        ],
+        {
+          session,
+        },
+      );
+
+      updatedSale = await Sale.findById(sale._id)
+        .populate(
+          "pond",
+          "name pondName pondNumber pondType pondSize currentFishCount currentAverageWeight waterSource status",
+        )
+        .session(session)
+        .lean();
+    });
 
     return {
       success: true,
       sale: updatedSale,
     };
   } catch (error) {
-    if (
-      error.code ===
-      "NOT_FOUND"
-    ) {
+    if (error.code === "NOT_FOUND") {
       return {
         success: false,
         reason: "NOT_FOUND",
       };
     }
 
-    if (
-      error.code ===
-      "POND_NOT_FOUND"
-    ) {
+    if (error.code === "POND_NOT_FOUND") {
       return {
         success: false,
         reason: "POND_NOT_FOUND",
       };
     }
 
-    if (
-      error.code ===
-      "QUANTITY_EXCEEDS_STOCK"
-    ) {
+    if (error.code === "QUANTITY_EXCEEDS_STOCK") {
       return {
         success: false,
-        reason:
-          "QUANTITY_EXCEEDS_STOCK",
+        reason: "QUANTITY_EXCEEDS_STOCK",
       };
     }
 
-    if (
-      error.code ===
-      "PAYMENT_EXCEEDS_TOTAL"
-    ) {
+    if (error.code === "PAYMENT_EXCEEDS_TOTAL") {
       return {
         success: false,
-        reason:
-          "PAYMENT_EXCEEDS_TOTAL",
+        reason: "PAYMENT_EXCEEDS_TOTAL",
       };
     }
 
-    if (
-      error.code ===
-      "CANNOT_CANCEL_PAID_SALE"
-    ) {
+    if (error.code === "CANNOT_CANCEL_PAID_SALE") {
       return {
         success: false,
-        reason:
-          "CANNOT_CANCEL_PAID_SALE",
+        reason: "CANNOT_CANCEL_PAID_SALE",
       };
     }
 
-    if (
-      error.code ===
-      "INVALID_QUANTITY"
-    ) {
+    if (error.code === "INVALID_QUANTITY") {
       return {
         success: false,
-        reason:
-          "INVALID_QUANTITY",
+        reason: "INVALID_QUANTITY",
       };
     }
 
-    if (
-      error.code ===
-      "INVALID_AVERAGE_WEIGHT"
-    ) {
+    if (error.code === "INVALID_AVERAGE_WEIGHT") {
       return {
         success: false,
-        reason:
-          "INVALID_AVERAGE_WEIGHT",
+        reason: "INVALID_AVERAGE_WEIGHT",
       };
     }
 
-    if (
-      error.code ===
-      "INVALID_PRICE"
-    ) {
+    if (error.code === "INVALID_PRICE") {
       return {
         success: false,
-        reason:
-          "INVALID_PRICE",
+        reason: "INVALID_PRICE",
       };
     }
 
-    if (
-      error.code ===
-      "INVALID_AMOUNT_PAID"
-    ) {
+    if (error.code === "INVALID_AMOUNT_PAID") {
       return {
         success: false,
-        reason:
-          "INVALID_AMOUNT_PAID",
+        reason: "INVALID_AMOUNT_PAID",
       };
     }
 
@@ -1402,15 +1022,118 @@ const updateSale = async ({
 
 /*
 |--------------------------------------------------------------------------
+| Delete Sale
+|--------------------------------------------------------------------------
+*/
+/*
+|--------------------------------------------------------------------------
+| Delete Sale
+|--------------------------------------------------------------------------
+*/
+
+const deleteSale = async ({ id, ipAddress, userAgent }) => {
+  if (!mongoose.isValidObjectId(id)) {
+    return {
+      success: false,
+      reason: "NOT_FOUND",
+    };
+  }
+
+  const session = await mongoose.startSession();
+
+  try {
+    let deletedSale = null;
+
+    await session.withTransaction(async () => {
+      const sale = await Sale.findById(id).session(session);
+
+      if (!sale) {
+        const error = new Error("Sale not found.");
+
+        error.code = "NOT_FOUND";
+
+        throw error;
+      }
+
+      /*
+       * A cancelled sale never held any fish
+       * against the pond, so there is nothing
+       * to give back. Every other status does.
+       */
+      if (sale.paymentStatus !== "cancelled") {
+        await restorePondStock({
+          pondId: sale.pond,
+          quantity: sale.quantitySold,
+          session,
+        });
+      }
+
+      deletedSale = {
+        _id: sale._id,
+        invoiceNumber: sale.invoiceNumber,
+        pond: sale.pond,
+        quantitySold: sale.quantitySold,
+        totalAmount: sale.totalAmount,
+        amountPaid: sale.amountPaid,
+        paymentStatus: sale.paymentStatus,
+      };
+
+      await Sale.deleteOne({ _id: sale._id }).session(session);
+
+      await ActivityLog.create(
+        [
+          {
+            action: "delete",
+
+            entityType: "Sale",
+
+            entityId: sale._id,
+
+            description: `Sale ${sale.invoiceNumber} was deleted.`,
+
+            metadata: {
+              invoiceNumber: sale.invoiceNumber,
+              pondId: sale.pond,
+              quantitySold: sale.quantitySold,
+              totalAmount: sale.totalAmount,
+              amountPaid: sale.amountPaid,
+              paymentStatus: sale.paymentStatus,
+            },
+
+            ipAddress: ipAddress || "",
+            userAgent: userAgent || "",
+          },
+        ],
+        {
+          session,
+        },
+      );
+    });
+
+    return {
+      success: true,
+      sale: deletedSale,
+    };
+  } catch (error) {
+    if (error.code === "NOT_FOUND") {
+      return {
+        success: false,
+        reason: "NOT_FOUND",
+      };
+    }
+
+    throw error;
+  } finally {
+    await session.endSession();
+  }
+};
+/*
+|--------------------------------------------------------------------------
 | Sales Summary
 |--------------------------------------------------------------------------
 */
 
-const getSalesSummary = async ({
-  from,
-  to,
-  pond,
-}) => {
+const getSalesSummary = async ({ from, to, pond }) => {
   const filter = {
     paymentStatus: {
       $ne: "cancelled",
@@ -1425,31 +1148,23 @@ const getSalesSummary = async ({
     filter.saleDate = {};
 
     if (from) {
-      const start =
-        startOfDay(from);
+      const start = startOfDay(from);
 
       if (start) {
-        filter.saleDate.$gte =
-          start;
+        filter.saleDate.$gte = start;
       }
     }
 
     if (to) {
-      const end =
-        endOfDay(to);
+      const end = endOfDay(to);
 
       if (end) {
-        filter.saleDate.$lte =
-          end;
+        filter.saleDate.$lte = end;
       }
     }
   }
 
-  const [
-    summary,
-    byDay,
-    byPaymentStatus,
-  ] = await Promise.all([
+  const [summary, byDay, byPaymentStatus] = await Promise.all([
     Sale.aggregate([
       {
         $match: filter,
@@ -1495,8 +1210,7 @@ const getSalesSummary = async ({
         $group: {
           _id: {
             $dateToString: {
-              format:
-                "%Y-%m-%d",
+              format: "%Y-%m-%d",
               date: "$saleDate",
             },
           },
@@ -1599,50 +1313,21 @@ const getSalesSummary = async ({
     ]),
   ]);
 
-  const totals =
-    summary[0] || {};
+  const totals = summary[0] || {};
 
   return {
     totals: {
-      totalSales:
-        totals.totalSales ||
-        0,
+      totalSales: totals.totalSales || 0,
 
-      totalFishSold:
-        totals.totalFishSold ||
-        0,
+      totalFishSold: totals.totalFishSold || 0,
 
-      totalWeightKg:
-        Number(
-          (
-            totals.totalWeightKg ||
-            0
-          ).toFixed(3),
-        ),
+      totalWeightKg: Number((totals.totalWeightKg || 0).toFixed(3)),
 
-      totalRevenue:
-        Number(
-          (
-            totals.totalRevenue ||
-            0
-          ).toFixed(2),
-        ),
+      totalRevenue: Number((totals.totalRevenue || 0).toFixed(2)),
 
-      totalCollected:
-        Number(
-          (
-            totals.totalCollected ||
-            0
-          ).toFixed(2),
-        ),
+      totalCollected: Number((totals.totalCollected || 0).toFixed(2)),
 
-      totalOutstanding:
-        Number(
-          (
-            totals.totalOutstanding ||
-            0
-          ).toFixed(2),
-        ),
+      totalOutstanding: Number((totals.totalOutstanding || 0).toFixed(2)),
     },
 
     byDay,
@@ -1656,6 +1341,7 @@ module.exports = {
   listSales,
   getSaleById,
   updateSale,
+  deleteSale,
   getSalesSummary,
   calculateTotalAmount,
   calculateTotalWeight,

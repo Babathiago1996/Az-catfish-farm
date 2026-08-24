@@ -50,10 +50,16 @@ const createExpenseValidators = [
     .isLength({ max: 2000 })
     .withMessage("Notes cannot exceed 2,000 characters."),
 
+  /*
+   * receiptImage is populated server-side from the
+   * uploaded file (see uploadMiddleware in the route),
+   * not typed in by the person, so it no longer needs
+   * to look like a URL here.
+   */
   body("receiptImage")
     .optional({ nullable: true, checkFalsy: true })
-    .isURL()
-    .withMessage("Receipt image must be a valid URL."),
+    .isString()
+    .withMessage("Receipt image is invalid."),
 ];
 
 const updateExpenseValidators = [
@@ -103,8 +109,14 @@ const updateExpenseValidators = [
     .withMessage("Notes cannot exceed 2,000 characters."),
   body("receiptImage")
     .optional({ nullable: true, checkFalsy: true })
-    .isURL()
-    .withMessage("Receipt image must be a valid URL."),
+    .isString()
+    .withMessage("Receipt image is invalid."),
+
+  body("removeReceiptImage")
+    .optional()
+    .isBoolean()
+    .withMessage("removeReceiptImage must be true or false.")
+    .toBoolean(),
 ];
 
 const expenseIdValidators = [

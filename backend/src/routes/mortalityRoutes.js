@@ -1,8 +1,8 @@
 const express = require("express");
 
-const {
-  protect
-} = require("../middleware/authMiddleware");
+const { protect } = require("../middleware/authMiddleware");
+
+const upload = require("../middleware/uploadMiddleware");
 
 const controller = require("../controllers/mortalityController");
 
@@ -11,41 +11,68 @@ const {
   updateMortalityValidators,
   mortalityIdValidators,
   listMortalityValidators,
-  mortalitySummaryValidators
+  mortalitySummaryValidators,
 } = require("../validators/mortalityValidators");
 
 const router = express.Router();
 
 router.use(protect);
 
+/*
+ * SUMMARY
+ *
+ * GET /api/mortality/summary
+ */
 router.get(
   "/summary",
   mortalitySummaryValidators,
-  controller.getMortalitySummary
+  controller.getMortalitySummary,
 );
 
-router.get(
-  "/",
-  listMortalityValidators,
-  controller.listMortality
-);
+/*
+ * LIST
+ *
+ * GET /api/mortality
+ */
+router.get("/", listMortalityValidators, controller.listMortality);
 
+/*
+ * CREATE
+ *
+ * POST /api/mortality
+ *
+ * multipart/form-data
+ *
+ * image field (up to 5 files):
+ * images
+ */
 router.post(
   "/",
+  upload.array("images", 5),
   createMortalityValidators,
-  controller.createMortality
+  controller.createMortality,
 );
 
-router.get(
-  "/:id",
-  mortalityIdValidators,
-  controller.getMortality
-);
+/*
+ * GET ONE
+ */
+router.get("/:id", mortalityIdValidators, controller.getMortality);
 
+/*
+ * UPDATE
+ *
+ * PATCH /api/mortality/:id
+ *
+ * multipart/form-data
+ *
+ * image field (up to 5 files):
+ * images
+ */
 router.patch(
   "/:id",
+  upload.array("images", 5),
   updateMortalityValidators,
-  controller.updateMortality
+  controller.updateMortality,
 );
 
 module.exports = router;

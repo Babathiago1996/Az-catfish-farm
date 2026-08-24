@@ -21,12 +21,7 @@ const dateStart = (value) => {
     return null;
   }
 
-  date.setHours(
-    0,
-    0,
-    0,
-    0,
-  );
+  date.setHours(0, 0, 0, 0);
 
   return date;
 };
@@ -38,12 +33,7 @@ const dateEnd = (value) => {
     return null;
   }
 
-  date.setHours(
-    23,
-    59,
-    59,
-    999,
-  );
+  date.setHours(23, 59, 59, 999);
 
   return date;
 };
@@ -54,18 +44,13 @@ const dateEnd = (value) => {
 |--------------------------------------------------------------------------
 */
 
-const getWaterChangeStatus = (
-  nextWaterChange,
-) => {
+const getWaterChangeStatus = (nextWaterChange) => {
   if (!nextWaterChange) {
     return "unknown";
   }
 
-  const today =
-    dateStart(new Date());
-
-  const nextDate =
-    dateStart(nextWaterChange);
+  const today = dateStart(new Date());
+  const nextDate = dateStart(nextWaterChange);
 
   if (!today || !nextDate) {
     return "unknown";
@@ -75,10 +60,7 @@ const getWaterChangeStatus = (
     return "overdue";
   }
 
-  if (
-    nextDate.getTime() ===
-    today.getTime()
-  ) {
+  if (nextDate.getTime() === today.getTime()) {
     return "due";
   }
 
@@ -97,9 +79,7 @@ const validatePond = async (
 ) => {
   if (
     !pondId ||
-    !mongoose.isValidObjectId(
-      pondId,
-    )
+    !mongoose.isValidObjectId(pondId)
   ) {
     return false;
   }
@@ -112,9 +92,7 @@ const validatePond = async (
     query.session(session);
   }
 
-  return Boolean(
-    await query,
-  );
+  return Boolean(await query);
 };
 
 /*
@@ -123,9 +101,7 @@ const validatePond = async (
 |--------------------------------------------------------------------------
 */
 
-const populateRecord = (
-  query,
-) =>
+const populateRecord = (query) =>
   query.populate(
     "pond",
     "name pondName pondNumber pondType pondSize status currentFishCount",
@@ -133,342 +109,304 @@ const populateRecord = (
 
 /*
 |--------------------------------------------------------------------------
-| Water Parameters
+| Build Create Data
 |--------------------------------------------------------------------------
 */
 
-const buildWaterParameters = (
-  data,
-) => {
-  if (!data.waterParameters) {
-    return undefined;
-  }
+const buildCreateData = (data) => {
+  const recordData = {
+    pond: data.pond,
 
-  return {
-    temperature:
-      data.waterParameters
-        .temperature ??
-      null,
+    nextWaterChange:
+      data.nextWaterChange ?? null,
 
-    ph:
-      data.waterParameters
-        .ph ?? null,
+    waterCondition:
+      data.waterCondition ?? "normal",
 
-    dissolvedOxygen:
-      data.waterParameters
-        .dissolvedOxygen ??
-      null,
+    waterLevel:
+      data.waterLevel ?? "normal",
 
-    ammonia:
-      data.waterParameters
-        .ammonia ?? null,
+    pumpStatus:
+      data.pumpStatus ?? "working",
 
-    nitrite:
-      data.waterParameters
-        .nitrite ?? null,
+    electricityStatus:
+      data.electricityStatus ?? "available",
+
+    waterChangeNotes:
+      data.waterChangeNotes ?? "",
   };
-};
 
-const applyWaterParameters = (
-  record,
-  data,
-) => {
-  if (!data.waterParameters) {
-    return;
+  /*
+   * lastWaterChange is accepted only when explicitly supplied.
+   *
+   * Normally the frontend does not send it when creating
+   * the initial water-management record.
+   */
+  if (data.lastWaterChange !== undefined) {
+    recordData.lastWaterChange =
+      data.lastWaterChange;
   }
 
-  const fields = [
-    "temperature",
-    "ph",
-    "dissolvedOxygen",
-    "ammonia",
-    "nitrite",
-  ];
-
-  if (!record.waterParameters) {
-    record.waterParameters = {};
-  }
-
-  fields.forEach(
-    (field) => {
-      if (
-        data.waterParameters[
-          field
-        ] !== undefined
-      ) {
-        record.waterParameters[
-          field
-        ] =
-          data.waterParameters[
-            field
-          ];
-      }
-    },
-  );
+  return recordData;
 };
 
 /*
 |--------------------------------------------------------------------------
 | Create / Upsert Water Management
 |--------------------------------------------------------------------------
+|
+| There is one record per pond.
+|
+| If the pond already has a record, this operation updates
+| the operational fields without accidentally resetting
+| lastWaterChange.
+|
 */
 
-const createWaterManagement =
-  async ({
-    data,
-    ipAddress,
-    userAgent,
-  }) => {
-    if (
-      !(await validatePond(
-        data.pond,
-      ))
-    ) {
-      return {
-        success: false,
-        reason:
-          "POND_NOT_FOUND",
-      };
-    }
-
-    const recordData = {
-      pond: data.pond,
-
-      lastWaterChange:
-        data.lastWaterChange ??
-        null,
-
-      nextWaterChange:
-        data.nextWaterChange ??
-        null,
-
-      waterQualityNotes:
-        data.waterQualityNotes ??
-        "",
-
-      pumpStatus:
-        data.pumpStatus ??
-        "working",
-
-      electricityStatus:
-        data.electricityStatus ??
-        "available",
-
-      pumpMaintenanceDate:
-        data.pumpMaintenanceDate ??
-        null,
-
-      nextPumpMaintenanceDate:
-        data.nextPumpMaintenanceDate ??
-        null,
-
-      generatorMaintenanceDate:
-        data.generatorMaintenanceDate ??
-        null,
-
-      nextGeneratorMaintenanceDate:
-        data.nextGeneratorMaintenanceDate ??
-        null,
-
-      notes:
-        data.notes ?? "",
+const createWaterManagement = async ({
+  data,
+  ipAddress,
+  userAgent,
+}) => {
+  if (!(await validatePond(data.pond))) {
+    return {
+      success: false,
+      reason: "POND_NOT_FOUND",
     };
+  }
 
-    const waterParameters =
-      buildWaterParameters(
-        data,
+  const session = await mongoose.startSession();
+
+  let created = false;
+  let recordId = null;
+
+  try {
+    await session.withTransaction(async () => {
+      /*
+       * Confirm pond still exists inside transaction.
+       */
+      const pondExists = await validatePond(
+        data.pond,
+        session,
       );
 
-    if (
-      waterParameters !==
-      undefined
-    ) {
-      recordData.waterParameters =
-        waterParameters;
-    }
+      if (!pondExists) {
+        const error = new Error(
+          "The selected pond was not found.",
+        );
 
-    const session =
-      await mongoose.startSession();
+        error.code = "POND_NOT_FOUND";
 
-    let created = false;
-    let recordId = null;
+        throw error;
+      }
 
-    try {
-      await session.withTransaction(
-        async () => {
-          /*
-           * Ensure pond still exists
-           * inside transaction.
-           */
-          const pondExists =
-            await validatePond(
-              data.pond,
-              session,
-            );
+      const existing =
+        await WaterManagement.findOne({
+          pond: data.pond,
+        }).session(session);
 
-          if (!pondExists) {
-            const error =
-              new Error(
-                "The selected pond was not found.",
-              );
+      if (existing) {
+        /*
+         * Do NOT replace the entire document.
+         *
+         * This prevents an initial create form from
+         * accidentally erasing lastWaterChange.
+         */
+        const fields = [
+          "nextWaterChange",
+          "waterCondition",
+          "waterLevel",
+          "pumpStatus",
+          "electricityStatus",
+          "waterChangeNotes",
+        ];
 
-            error.code =
-              "POND_NOT_FOUND";
-
-            throw error;
+        fields.forEach((field) => {
+          if (data[field] !== undefined) {
+            existing[field] = data[field];
           }
+        });
 
-          const existing =
-            await WaterManagement.findOne(
-              {
-                pond: data.pond,
-              },
-            ).session(session);
+        if (data.lastWaterChange !== undefined) {
+          existing.lastWaterChange =
+            data.lastWaterChange;
+        }
 
-          let record;
+        const record = await existing.save({
+          session,
+        });
 
-          if (existing) {
-            Object.assign(
-              existing,
-              recordData,
-            );
+        recordId = record._id;
+        created = false;
 
-            if (
-              waterParameters !==
-              undefined
-            ) {
-              existing.waterParameters =
-                waterParameters;
-            }
-
-            record =
-              await existing.save({
-                session,
-              });
-
-            created = false;
-          } else {
-            [
-              record,
-            ] =
-              await WaterManagement.create(
-                [recordData],
-                {
-                  session,
-                },
-              );
-
-            created = true;
-          }
-
-          recordId =
-            record._id;
-
-          await ActivityLog.create(
-            [
-              {
-                action:
-                  created
-                    ? "create"
-                    : "update",
-
-                entityType:
-                  "WaterManagement",
-
-                entityId:
-                  record._id,
-
-                description: `Water-management information was ${
-                  created
-                    ? "recorded"
-                    : "updated"
-                }.`,
-
-                metadata: {
-                  pondId:
-                    record.pond,
-
-                  nextWaterChange:
-                    record.nextWaterChange,
-
-                  pumpStatus:
-                    record.pumpStatus,
-
-                  electricityStatus:
-                    record.electricityStatus,
-                },
-
-                ipAddress:
-                  ipAddress || "",
-
-                userAgent:
-                  userAgent || "",
-              },
-            ],
+        await ActivityLog.create(
+          [
             {
-              session,
-            },
-          );
-        },
-      );
+              action: "update",
 
-      const savedRecord =
-        await populateRecord(
-          WaterManagement.findById(
-            recordId,
-          ),
-        ).lean();
+              entityType:
+                "WaterManagement",
+
+              entityId: record._id,
+
+              description:
+                "Water-management information was updated.",
+
+              metadata: {
+                pondId: record.pond,
+
+                nextWaterChange:
+                  record.nextWaterChange,
+
+                waterCondition:
+                  record.waterCondition,
+
+                waterLevel:
+                  record.waterLevel,
+
+                pumpStatus:
+                  record.pumpStatus,
+
+                electricityStatus:
+                  record.electricityStatus,
+              },
+
+              ipAddress:
+                ipAddress || "",
+
+              userAgent:
+                userAgent || "",
+            },
+          ],
+          {
+            session,
+          },
+        );
+
+        return;
+      }
 
       /*
-       * Only send the "created"
-       * notification for a new record.
+       * New record.
        */
-      if (created) {
-        try {
-          await notifyWaterRecordCreated(
-            {
-              water:
-                savedRecord,
+      const recordData =
+        buildCreateData(data);
 
-              record:
-                savedRecord,
+      const records =
+        await WaterManagement.create(
+          [recordData],
+          {
+            session,
+          },
+        );
+
+      const record = records[0];
+
+      recordId = record._id;
+      created = true;
+
+      await ActivityLog.create(
+        [
+          {
+            action: "create",
+
+            entityType:
+              "WaterManagement",
+
+            entityId: record._id,
+
+            description:
+              "Water-management information was recorded.",
+
+            metadata: {
+              pondId: record.pond,
+
+              nextWaterChange:
+                record.nextWaterChange,
+
+              waterCondition:
+                record.waterCondition,
+
+              waterLevel:
+                record.waterLevel,
+
+              pumpStatus:
+                record.pumpStatus,
+
+              electricityStatus:
+                record.electricityStatus,
             },
-          );
-        } catch (
-          notificationError
-        ) {
-          console.error(
-            "Water-management notification failed:",
-            notificationError.message,
-          );
-        }
-      }
 
-      return {
-        success: true,
+            ipAddress:
+              ipAddress || "",
 
-        record:
-          savedRecord,
+            userAgent:
+              userAgent || "",
+          },
+        ],
+        {
+          session,
+        },
+      );
+    });
 
-        created,
-      };
-    } catch (error) {
-      if (
-        error.code ===
-        "POND_NOT_FOUND"
-      ) {
-        return {
-          success: false,
-          reason:
-            "POND_NOT_FOUND",
-        };
-      }
+    const savedRecord =
+      await populateRecord(
+        WaterManagement.findById(recordId),
+      ).lean();
 
-      throw error;
-    } finally {
-      await session.endSession();
+    if (!savedRecord) {
+      throw new Error(
+        "Water-management record could not be retrieved after saving.",
+      );
     }
-  };
+
+    /*
+     * Notification is only for a genuinely new record.
+     */
+    if (created) {
+      try {
+        await notifyWaterRecordCreated({
+          water: savedRecord,
+          record: savedRecord,
+        });
+      } catch (notificationError) {
+        console.error(
+          "Water-management notification failed:",
+          notificationError.message,
+        );
+      }
+    }
+
+    return {
+      success: true,
+      record: savedRecord,
+      created,
+    };
+  } catch (error) {
+    if (error.code === "POND_NOT_FOUND") {
+      return {
+        success: false,
+        reason: "POND_NOT_FOUND",
+      };
+    }
+
+    /*
+     * A unique pond constraint can theoretically be hit
+     * by two simultaneous requests.
+     */
+    if (error.code === 11000) {
+      return {
+        success: false,
+        reason: "DUPLICATE_RECORD",
+      };
+    }
+
+    throw error;
+  } finally {
+    await session.endSession();
+  }
+};
 
 /*
 |--------------------------------------------------------------------------
@@ -476,104 +414,83 @@ const createWaterManagement =
 |--------------------------------------------------------------------------
 */
 
-const listWaterManagement =
-  async ({
-    pond,
-    status,
-    from,
-    to,
-    page = 1,
-    limit = 30,
-  }) => {
-    const currentPage =
-      Math.max(
-        Number(page) || 1,
-        1,
-      );
+const listWaterManagement = async ({
+  pond,
+  status,
+  from,
+  to,
+  page = 1,
+  limit = 30,
+}) => {
+  const currentPage = Math.max(
+    Number(page) || 1,
+    1,
+  );
 
-    const pageSize =
-      Math.min(
-        Math.max(
-          Number(limit) || 30,
-          1,
-        ),
-        100,
-      );
+  const pageSize = Math.min(
+    Math.max(Number(limit) || 30, 1),
+    100,
+  );
 
-    const filter = {};
+  const filter = {};
 
-    if (pond) {
-      filter.pond = pond;
-    }
+  if (pond) {
+    filter.pond = pond;
+  }
 
-    if (from || to) {
-      filter.nextWaterChange =
-        {};
+  /*
+   * Date range filtering applies to next scheduled
+   * water change.
+   */
+  if (from || to) {
+    filter.nextWaterChange = {};
 
-      if (from) {
-        const start =
-          dateStart(from);
+    if (from) {
+      const start = dateStart(from);
 
-        if (start) {
-          filter.nextWaterChange.$gte =
-            start;
-        }
-      }
-
-      if (to) {
-        const end =
-          dateEnd(to);
-
-        if (end) {
-          filter.nextWaterChange.$lte =
-            end;
-        }
+      if (start) {
+        filter.nextWaterChange.$gte = start;
       }
     }
 
-    const todayStart =
-      dateStart(new Date());
+    if (to) {
+      const end = dateEnd(to);
 
-    const todayEnd =
-      dateEnd(new Date());
-
-    if (status === "overdue") {
-      filter.nextWaterChange = {
-        ...(filter.nextWaterChange ||
-          {}),
-
-        $lt: todayStart,
-      };
+      if (end) {
+        filter.nextWaterChange.$lte = end;
+      }
     }
+  }
 
-    if (status === "due") {
-      filter.nextWaterChange = {
-        ...(filter.nextWaterChange ||
-          {}),
+  const todayStart = dateStart(new Date());
+  const todayEnd = dateEnd(new Date());
 
-        $gte: todayStart,
+  if (status === "overdue") {
+    filter.nextWaterChange = {
+      ...(filter.nextWaterChange || {}),
+      $lt: todayStart,
+    };
+  }
 
-        $lte: todayEnd,
-      };
-    }
+  if (status === "due") {
+    filter.nextWaterChange = {
+      ...(filter.nextWaterChange || {}),
+      $gte: todayStart,
+      $lte: todayEnd,
+    };
+  }
 
-    if (status === "upcoming") {
-      filter.nextWaterChange = {
-        ...(filter.nextWaterChange ||
-          {}),
+  if (status === "upcoming") {
+    filter.nextWaterChange = {
+      ...(filter.nextWaterChange || {}),
+      $gt: todayEnd,
+    };
+  }
 
-        $gt: todayEnd,
-      };
-    }
-
-    const [
-      records,
-      total,
-    ] = await Promise.all([
+  const [records, total] =
+    await Promise.all([
       populateRecord(
-        WaterManagement.find(
-          filter,
-        )
+        WaterManagement.find(filter)
           .sort({
             nextWaterChange: 1,
             updatedAt: -1,
@@ -591,75 +508,65 @@ const listWaterManagement =
       ),
     ]);
 
-    const formattedRecords =
-      records.map(
-        (record) => ({
-          ...record,
-
-          waterChangeStatus:
-            getWaterChangeStatus(
-              record.nextWaterChange,
-            ),
-        }),
-      );
-
-    return {
-      records:
-        formattedRecords,
-
-      pagination: {
-        page: currentPage,
-
-        limit: pageSize,
-
-        total,
-
-        pages: Math.ceil(
-          total / pageSize,
-        ),
-      },
-    };
-  };
-
-/*
-|--------------------------------------------------------------------------
-| Get Water Management
-|--------------------------------------------------------------------------
-*/
-
-const getWaterManagementById =
-  async (id) => {
-    if (
-      !mongoose.isValidObjectId(
-        id,
-      )
-    ) {
-      return null;
-    }
-
-    const record =
-      await populateRecord(
-        WaterManagement.findById(
-          id,
-        ),
-      );
-
-    if (!record) {
-      return null;
-    }
-
-    const plain =
-      record.toObject();
-
-    return {
-      ...plain,
+  const formattedRecords =
+    records.map((record) => ({
+      ...record,
 
       waterChangeStatus:
         getWaterChangeStatus(
-          plain.nextWaterChange,
+          record.nextWaterChange,
         ),
-    };
+    }));
+
+  return {
+    records: formattedRecords,
+
+    pagination: {
+      page: currentPage,
+      limit: pageSize,
+      total,
+      pages: Math.ceil(
+        total / pageSize,
+      ),
+    },
   };
+};
+
+/*
+|--------------------------------------------------------------------------
+| Get One Water Management Record
+|--------------------------------------------------------------------------
+*/
+
+const getWaterManagementById = async (
+  id,
+) => {
+  if (
+    !mongoose.isValidObjectId(id)
+  ) {
+    return null;
+  }
+
+  const record =
+    await populateRecord(
+      WaterManagement.findById(id),
+    );
+
+  if (!record) {
+    return null;
+  }
+
+  const plain = record.toObject();
+
+  return {
+    ...plain,
+
+    waterChangeStatus:
+      getWaterChangeStatus(
+        plain.nextWaterChange,
+      ),
+  };
+};
 
 /*
 |--------------------------------------------------------------------------
@@ -667,280 +574,275 @@ const getWaterManagementById =
 |--------------------------------------------------------------------------
 */
 
-const updateWaterManagement =
-  async ({
-    id,
-    data,
-    ipAddress,
-    userAgent,
-  }) => {
-    if (
-      !mongoose.isValidObjectId(
-        id,
-      )
-    ) {
-      return {
-        success: false,
-        reason: "NOT_FOUND",
-      };
-    }
-
-    const record =
-      await WaterManagement.findById(
-        id,
-      );
-
-    if (!record) {
-      return {
-        success: false,
-        reason: "NOT_FOUND",
-      };
-    }
-
-    if (
-      data.pond !== undefined &&
-      !(await validatePond(
-        data.pond,
-      ))
-    ) {
-      return {
-        success: false,
-        reason:
-          "POND_NOT_FOUND",
-      };
-    }
-
-    const fields = [
-      "pond",
-      "lastWaterChange",
-      "nextWaterChange",
-      "waterQualityNotes",
-      "pumpStatus",
-      "electricityStatus",
-      "pumpMaintenanceDate",
-      "nextPumpMaintenanceDate",
-      "generatorMaintenanceDate",
-      "nextGeneratorMaintenanceDate",
-      "notes",
-    ];
-
-    fields.forEach(
-      (field) => {
-        if (
-          data[field] !==
-          undefined
-        ) {
-          record[field] =
-            data[field];
-        }
-      },
-    );
-
-    applyWaterParameters(
-      record,
-      data,
-    );
-
-    await record.save();
-
-    await ActivityLog.create({
-      action: "update",
-
-      entityType:
-        "WaterManagement",
-
-      entityId:
-        record._id,
-
-      description:
-        "Water-management information was updated.",
-
-      metadata: {
-        pondId:
-          record.pond,
-
-        lastWaterChange:
-          record.lastWaterChange,
-
-        nextWaterChange:
-          record.nextWaterChange,
-
-        pumpStatus:
-          record.pumpStatus,
-
-        electricityStatus:
-          record.electricityStatus,
-      },
-
-      ipAddress:
-        ipAddress || "",
-
-      userAgent:
-        userAgent || "",
-    });
-
-    const updatedRecord =
-      await populateRecord(
-        WaterManagement.findById(
-          record._id,
-        ),
-      ).lean();
-
+const updateWaterManagement = async ({
+  id,
+  data,
+  ipAddress,
+  userAgent,
+}) => {
+  if (
+    !mongoose.isValidObjectId(id)
+  ) {
     return {
-      success: true,
-
-      record:
-        updatedRecord,
+      success: false,
+      reason: "NOT_FOUND",
     };
+  }
+
+  const record =
+    await WaterManagement.findById(id);
+
+  if (!record) {
+    return {
+      success: false,
+      reason: "NOT_FOUND",
+    };
+  }
+
+  if (
+    data.pond !== undefined &&
+    !(await validatePond(data.pond))
+  ) {
+    return {
+      success: false,
+      reason: "POND_NOT_FOUND",
+    };
+  }
+
+  /*
+   * If changing the pond, make sure the new pond
+   * does not already have another water-management record.
+   */
+  if (
+    data.pond !== undefined &&
+    String(data.pond) !==
+      String(record.pond)
+  ) {
+    const duplicate =
+      await WaterManagement.findOne({
+        pond: data.pond,
+        _id: { $ne: record._id },
+      }).lean();
+
+    if (duplicate) {
+      return {
+        success: false,
+        reason: "DUPLICATE_RECORD",
+      };
+    }
+  }
+
+  const fields = [
+    "pond",
+    "lastWaterChange",
+    "nextWaterChange",
+    "waterCondition",
+    "waterLevel",
+    "pumpStatus",
+    "electricityStatus",
+    "waterChangeNotes",
+  ];
+
+  fields.forEach((field) => {
+    if (data[field] !== undefined) {
+      record[field] = data[field];
+    }
+  });
+
+  await record.save();
+
+  await ActivityLog.create({
+    action: "update",
+
+    entityType:
+      "WaterManagement",
+
+    entityId: record._id,
+
+    description:
+      "Water-management information was updated.",
+
+    metadata: {
+      pondId: record.pond,
+
+      lastWaterChange:
+        record.lastWaterChange,
+
+      nextWaterChange:
+        record.nextWaterChange,
+
+      waterCondition:
+        record.waterCondition,
+
+      waterLevel:
+        record.waterLevel,
+
+      pumpStatus:
+        record.pumpStatus,
+
+      electricityStatus:
+        record.electricityStatus,
+    },
+
+    ipAddress:
+      ipAddress || "",
+
+    userAgent:
+      userAgent || "",
+  });
+
+  const updatedRecord =
+    await populateRecord(
+      WaterManagement.findById(
+        record._id,
+      ),
+    ).lean();
+
+  return {
+    success: true,
+    record: updatedRecord,
   };
+};
 
 /*
 |--------------------------------------------------------------------------
 | Record Water Change
 |--------------------------------------------------------------------------
+|
+| This is the main day-to-day operation.
+|
+| lastWaterChange is ALWAYS set by the backend to now.
+|
 */
 
-const recordWaterChange =
-  async ({
-    id,
-    nextWaterChange,
-    waterQualityNotes,
-    waterParameters,
-    pumpStatus,
-    electricityStatus,
-    notes,
-    ipAddress,
-    userAgent,
-  }) => {
-    if (
-      !mongoose.isValidObjectId(
-        id,
-      )
-    ) {
-      return {
-        success: false,
-        reason: "NOT_FOUND",
-      };
-    }
-
-    const record =
-      await WaterManagement.findById(
-        id,
-      );
-
-    if (!record) {
-      return {
-        success: false,
-        reason: "NOT_FOUND",
-      };
-    }
-
-    const previousWaterChange =
-      record.lastWaterChange;
-
-    record.lastWaterChange =
-      new Date();
-
-    if (
-      nextWaterChange !==
-      undefined
-    ) {
-      record.nextWaterChange =
-        nextWaterChange;
-    }
-
-    if (
-      waterQualityNotes !==
-      undefined
-    ) {
-      record.waterQualityNotes =
-        waterQualityNotes;
-    }
-
-    if (
-      pumpStatus !== undefined
-    ) {
-      record.pumpStatus =
-        pumpStatus;
-    }
-
-    if (
-      electricityStatus !==
-      undefined
-    ) {
-      record.electricityStatus =
-        electricityStatus;
-    }
-
-    if (notes !== undefined) {
-      record.notes = notes;
-    }
-
-    if (
-      waterParameters !==
-      undefined
-    ) {
-      applyWaterParameters(
-        record,
-        {
-          waterParameters,
-        },
-      );
-    }
-
-    await record.save();
-
-    /*
-     * ActivityLog does not have
-     * "water_change" in its enum.
-     * Therefore "update" is used.
-     */
-    await ActivityLog.create({
-      action: "update",
-
-      entityType:
-        "WaterManagement",
-
-      entityId:
-        record._id,
-
-      description:
-        "Water change was recorded.",
-
-      metadata: {
-        previousWaterChange,
-
-        newWaterChange:
-          record.lastWaterChange,
-
-        nextWaterChange:
-          record.nextWaterChange,
-
-        pondId:
-          record.pond,
-      },
-
-      ipAddress:
-        ipAddress || "",
-
-      userAgent:
-        userAgent || "",
-    });
-
-    const updatedRecord =
-      await populateRecord(
-        WaterManagement.findById(
-          record._id,
-        ),
-      ).lean();
-
+const recordWaterChange = async ({
+  id,
+  nextWaterChange,
+  waterCondition,
+  waterLevel,
+  pumpStatus,
+  electricityStatus,
+  waterChangeNotes,
+  ipAddress,
+  userAgent,
+}) => {
+  if (
+    !mongoose.isValidObjectId(id)
+  ) {
     return {
-      success: true,
-
-      record:
-        updatedRecord,
+      success: false,
+      reason: "NOT_FOUND",
     };
+  }
+
+  const record =
+    await WaterManagement.findById(id);
+
+  if (!record) {
+    return {
+      success: false,
+      reason: "NOT_FOUND",
+    };
+  }
+
+  const previousWaterChange =
+    record.lastWaterChange;
+
+  /*
+   * Automatically record the actual water-change time.
+   */
+  record.lastWaterChange = new Date();
+
+  if (nextWaterChange !== undefined) {
+    record.nextWaterChange =
+      nextWaterChange;
+  }
+
+  if (waterCondition !== undefined) {
+    record.waterCondition =
+      waterCondition;
+  }
+
+  if (waterLevel !== undefined) {
+    record.waterLevel =
+      waterLevel;
+  }
+
+  if (pumpStatus !== undefined) {
+    record.pumpStatus =
+      pumpStatus;
+  }
+
+  if (
+    electricityStatus !== undefined
+  ) {
+    record.electricityStatus =
+      electricityStatus;
+  }
+
+  if (
+    waterChangeNotes !== undefined
+  ) {
+    record.waterChangeNotes =
+      waterChangeNotes;
+  }
+
+  await record.save();
+
+  await ActivityLog.create({
+    action: "update",
+
+    entityType:
+      "WaterManagement",
+
+    entityId: record._id,
+
+    description:
+      "Water change was recorded.",
+
+    metadata: {
+      previousWaterChange,
+
+      newWaterChange:
+        record.lastWaterChange,
+
+      nextWaterChange:
+        record.nextWaterChange,
+
+      pondId: record.pond,
+
+      waterCondition:
+        record.waterCondition,
+
+      waterLevel:
+        record.waterLevel,
+
+      pumpStatus:
+        record.pumpStatus,
+
+      electricityStatus:
+        record.electricityStatus,
+    },
+
+    ipAddress:
+      ipAddress || "",
+
+    userAgent:
+      userAgent || "",
+  });
+
+  const updatedRecord =
+    await populateRecord(
+      WaterManagement.findById(
+        record._id,
+      ),
+    ).lean();
+
+  return {
+    success: true,
+    record: updatedRecord,
   };
+};
 
 /*
 |--------------------------------------------------------------------------
@@ -948,124 +850,102 @@ const recordWaterChange =
 |--------------------------------------------------------------------------
 */
 
-const getWaterChangeSummary =
-  async () => {
-    const records =
-      await WaterManagement.find(
-        {
-          nextWaterChange: {
-            $ne: null,
-          },
-        },
-      )
-        .select(
-          [
-            "pond",
-            "nextWaterChange",
-            "pumpStatus",
-            "electricityStatus",
-          ].join(" "),
-        )
-        .populate(
+const getWaterChangeSummary = async () => {
+  const records =
+    await WaterManagement.find({})
+      .select(
+        [
           "pond",
-          "name pondName pondNumber status",
-        )
-        .lean();
+          "nextWaterChange",
+          "pumpStatus",
+          "electricityStatus",
+          "waterCondition",
+          "waterLevel",
+        ].join(" "),
+      )
+      .populate(
+        "pond",
+        "name pondName pondNumber status",
+      )
+      .lean();
 
-    let due = 0;
+  let due = 0;
+  let overdue = 0;
+  let upcoming = 0;
+  let pumpAttention = 0;
+  let electricityAttention = 0;
 
-    let overdue = 0;
-
-    let upcoming = 0;
-
-    let pumpAttention = 0;
-
-    let electricityAttention =
-      0;
-
-    records.forEach(
-      (record) => {
-        const status =
-          getWaterChangeStatus(
-            record.nextWaterChange,
-          );
-
-        if (status === "due") {
-          due += 1;
-        }
-
-        if (
-          status === "overdue"
-        ) {
-          overdue += 1;
-        }
-
-        if (
-          status === "upcoming"
-        ) {
-          upcoming += 1;
-        }
-
-        if (
-          record.pumpStatus ===
-            "maintenance" ||
-          record.pumpStatus ===
-            "faulty"
-        ) {
-          pumpAttention += 1;
-        }
-
-        if (
-          record.electricityStatus ===
-          "unavailable"
-        ) {
-          electricityAttention +=
-            1;
-        }
-      },
-    );
-
-    const attentionRecords =
-      records.filter(
-        (record) => {
-          const status =
-            getWaterChangeStatus(
-              record.nextWaterChange,
-            );
-
-          return (
-            status === "due" ||
-            status === "overdue" ||
-            record.pumpStatus ===
-              "maintenance" ||
-            record.pumpStatus ===
-              "faulty" ||
-            record.electricityStatus ===
-              "unavailable"
-          );
-        },
+  records.forEach((record) => {
+    const status =
+      getWaterChangeStatus(
+        record.nextWaterChange,
       );
 
-    return {
-      total:
-        records.length,
+    if (status === "due") {
+      due += 1;
+    }
 
-      due,
+    if (status === "overdue") {
+      overdue += 1;
+    }
 
-      overdue,
+    if (status === "upcoming") {
+      upcoming += 1;
+    }
 
-      upcoming,
+    if (
+      record.pumpStatus ===
+        "maintenance" ||
+      record.pumpStatus === "faulty"
+    ) {
+      pumpAttention += 1;
+    }
 
-      pumpAttention,
+    if (
+      record.electricityStatus ===
+      "unavailable"
+    ) {
+      electricityAttention += 1;
+    }
+  });
 
-      electricityAttention,
+  const attentionRecords =
+    records.filter((record) => {
+      const status =
+        getWaterChangeStatus(
+          record.nextWaterChange,
+        );
 
-      attentionRecords,
+      return (
+        status === "due" ||
+        status === "overdue" ||
+        record.pumpStatus ===
+          "maintenance" ||
+        record.pumpStatus ===
+          "faulty" ||
+        record.electricityStatus ===
+          "unavailable"
+      );
+    });
 
-      generatedAt:
-        new Date(),
-    };
+  return {
+    total: records.length,
+
+    due,
+
+    overdue,
+
+    upcoming,
+
+    pumpAttention,
+
+    electricityAttention,
+
+    attentionRecords,
+
+    generatedAt: new Date(),
   };
+};
 
 module.exports = {
   createWaterManagement,

@@ -1,9 +1,9 @@
-const { body, param, query } = require("express-validator");
+const {
+  body,
+  param,
+  query,
+} = require("express-validator");
 
-/*
- * Keep this list synchronized with the
- * estimatedCause enum in the Mortality model.
- */
 const MORTALITY_CAUSES = [
   "disease",
   "poor_water_quality",
@@ -17,147 +17,223 @@ const MORTALITY_CAUSES = [
 ];
 
 /**
- * Create mortality record validators
+ * CREATE
  */
 const createMortalityValidators = [
   body("date")
     .isISO8601()
-    .withMessage("Mortality date must be a valid date.")
+    .withMessage(
+      "Mortality date must be a valid date.",
+    )
     .toDate(),
 
-  body("pond").isMongoId().withMessage("A valid pond is required."),
+  body("pond")
+    .isMongoId()
+    .withMessage(
+      "A valid pond is required.",
+    ),
 
   body("quantity")
     .isInt({ min: 1 })
-    .withMessage("Mortality quantity must be at least 1.")
+    .withMessage(
+      "Mortality quantity must be at least 1.",
+    )
     .toInt(),
 
   body("estimatedCause")
-    .optional({ nullable: true })
+    .optional({
+      nullable: true,
+      checkFalsy: true,
+    })
     .isIn(MORTALITY_CAUSES)
     .withMessage(
       `Estimated cause must be one of: ${MORTALITY_CAUSES.join(", ")}.`,
     ),
 
   body("notes")
-    .optional({ nullable: true })
-    .trim()
-    .isLength({ max: 3000 })
-    .withMessage("Notes cannot exceed 3,000 characters."),
-
-  /*
-   * These fields correspond to the nested
-   * Mortality.image object in the model.
-   *
-   * The controller/service converts them into:
-   *
-   * image: {
-   *   url: imageUrl,
-   *   publicId: imagePublicId
-   * }
-   */
-  body("imageUrl")
-    .optional({ nullable: true })
-    .isURL({
-      protocols: ["http", "https"],
-      require_protocol: true,
+    .optional({
+      nullable: true,
+      checkFalsy: true,
     })
-    .withMessage("Image URL must be a valid HTTP or HTTPS URL."),
-
-  body("imagePublicId")
-    .optional({ nullable: true })
     .trim()
-    .isLength({ max: 500 })
-    .withMessage("Image public ID cannot exceed 500 characters."),
+    .isLength({
+      max: 3000,
+    })
+    .withMessage(
+      "Notes cannot exceed 3,000 characters.",
+    ),
 ];
 
 /**
- * Update mortality record validators
+ * UPDATE
  */
 const updateMortalityValidators = [
-  param("id").isMongoId().withMessage("Mortality record ID must be valid."),
+  param("id")
+    .isMongoId()
+    .withMessage(
+      "Mortality record ID must be valid.",
+    ),
 
   body("date")
-    .optional()
+    .optional({
+      nullable: true,
+      checkFalsy: true,
+    })
     .isISO8601()
-    .withMessage("Mortality date must be a valid date.")
+    .withMessage(
+      "Mortality date must be a valid date.",
+    )
     .toDate(),
 
-  body("pond").optional().isMongoId().withMessage("Pond must be a valid ID."),
+  body("pond")
+    .optional({
+      nullable: true,
+      checkFalsy: true,
+    })
+    .isMongoId()
+    .withMessage(
+      "Pond must be a valid ID.",
+    ),
 
   body("quantity")
-    .optional()
+    .optional({
+      nullable: true,
+      checkFalsy: true,
+    })
     .isInt({ min: 1 })
-    .withMessage("Mortality quantity must be at least 1.")
+    .withMessage(
+      "Mortality quantity must be at least 1.",
+    )
     .toInt(),
 
   body("estimatedCause")
-    .optional({ nullable: true })
+    .optional({
+      nullable: true,
+      checkFalsy: true,
+    })
     .isIn(MORTALITY_CAUSES)
     .withMessage(
       `Estimated cause must be one of: ${MORTALITY_CAUSES.join(", ")}.`,
     ),
 
   body("notes")
-    .optional({ nullable: true })
-    .trim()
-    .isLength({ max: 3000 })
-    .withMessage("Notes cannot exceed 3,000 characters."),
-
-  body("imageUrl")
-    .optional({ nullable: true })
-    .isURL({
-      protocols: ["http", "https"],
-      require_protocol: true,
+    .optional({
+      nullable: true,
+      checkFalsy: true,
     })
-    .withMessage("Image URL must be a valid HTTP or HTTPS URL."),
-
-  body("imagePublicId")
-    .optional({ nullable: true })
     .trim()
-    .isLength({ max: 500 })
-    .withMessage("Image public ID cannot exceed 500 characters."),
+    .isLength({
+      max: 3000,
+    })
+    .withMessage(
+      "Notes cannot exceed 3,000 characters.",
+    ),
 ];
 
 /**
- * Get one mortality record
+ * GET ONE
  */
 const mortalityIdValidators = [
-  param("id").isMongoId().withMessage("Mortality record ID must be valid."),
+  param("id")
+    .isMongoId()
+    .withMessage(
+      "Mortality record ID must be valid.",
+    ),
 ];
 
 /**
- * List mortality records
+ * LIST
  */
 const listMortalityValidators = [
-  query("pond").optional().isMongoId().withMessage("Pond must be a valid ID."),
+  query("pond")
+    .optional({
+      nullable: true,
+      checkFalsy: true,
+    })
+    .isMongoId()
+    .withMessage(
+      "Pond must be a valid ID.",
+    ),
 
-  query("from").optional().isISO8601().withMessage("From date must be valid."),
+  query("from")
+    .optional({
+      nullable: true,
+      checkFalsy: true,
+    })
+    .isISO8601()
+    .withMessage(
+      "From date must be valid.",
+    ),
 
-  query("to").optional().isISO8601().withMessage("To date must be valid."),
+  query("to")
+    .optional({
+      nullable: true,
+      checkFalsy: true,
+    })
+    .isISO8601()
+    .withMessage(
+      "To date must be valid.",
+    ),
 
   query("page")
-    .optional()
+    .optional({
+      nullable: true,
+      checkFalsy: true,
+    })
     .isInt({ min: 1 })
-    .withMessage("Page must be at least 1.")
+    .withMessage(
+      "Page must be at least 1.",
+    )
     .toInt(),
 
   query("limit")
-    .optional()
-    .isInt({ min: 1, max: 100 })
-    .withMessage("Limit must be between 1 and 100.")
+    .optional({
+      nullable: true,
+      checkFalsy: true,
+    })
+    .isInt({
+      min: 1,
+      max: 100,
+    })
+    .withMessage(
+      "Limit must be between 1 and 100.",
+    )
     .toInt(),
 ];
 
 /**
- * Mortality summary
+ * SUMMARY
  */
 const mortalitySummaryValidators = [
-  query("pond").optional().isMongoId().withMessage("Pond must be a valid ID."),
+  query("pond")
+    .optional({
+      nullable: true,
+      checkFalsy: true,
+    })
+    .isMongoId()
+    .withMessage(
+      "Pond must be a valid ID.",
+    ),
 
-  query("from").optional().isISO8601().withMessage("From date must be valid."),
+  query("from")
+    .optional({
+      nullable: true,
+      checkFalsy: true,
+    })
+    .isISO8601()
+    .withMessage(
+      "From date must be valid.",
+    ),
 
-  query("to").optional().isISO8601().withMessage("To date must be valid."),
+  query("to")
+    .optional({
+      nullable: true,
+      checkFalsy: true,
+    })
+    .isISO8601()
+    .withMessage(
+      "To date must be valid.",
+    ),
 ];
 
 module.exports = {

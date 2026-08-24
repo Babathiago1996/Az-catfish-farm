@@ -27,6 +27,7 @@ const settingsRoutes = require("./routes/settingsRoutes");
 const dashboardRoutes = require("./routes/dashboardRoutes");
 const publicWebsiteRoutes = require("./routes/publicWebsiteRoutes");
 const dailyActivityRoutes = require("./routes/dailyActivityRoutes");
+const invoiceRoutes = require("./routes/invoiceRoutes");
 
 const notFoundMiddleware = require("./middleware/notFoundMiddleware");
 const errorMiddleware = require("./middleware/errorMiddleware");
@@ -135,13 +136,12 @@ app.use("/api/stocking", stockingRoutes);
 app.use("/api/growth", growthRoutes);
 app.use("/api/mortality", mortalityRoutes);
 
-app.use("/api/daily-activities", dailyActivityRoutes);
-
 app.use("/api/feeding", feedingRoutes);
 
 app.use("/api/water-management", waterManagementRoutes);
 app.use("/api/expenses", expenseRoutes);
 app.use("/api/sales", saleRoutes);
+app.use("/api/invoices", invoiceRoutes);
 app.use("/api/inventory", inventoryRoutes);
 app.use("/api/customers", customerRoutes);
 app.use("/api/suppliers", supplierRoutes);

@@ -6,7 +6,15 @@ export const API_BASE_URL =
 
 export const apiClient = axios.create({
   baseURL: API_BASE_URL.replace(/\/$/, ""),
-  timeout: 20000,
+  /*
+   * 45s gives multi-image uploads (up to 5 files) enough
+   * headroom on slower connections. Backend now uploads
+   * all images to Cloudinary in parallel rather than one
+   * at a time, so this is a safety margin, not a fix for
+   * slowness — a request that actually needs this long
+   * is unusual, not the norm.
+   */
+  timeout: 45000,
   headers: {
     "Content-Type": "application/json",
   },
@@ -27,6 +35,36 @@ apiClient.interceptors.request.use(
       if (token) {
         config.headers = config.headers || {};
         config.headers.Authorization = `Bearer ${token}`;
+      }
+    }
+
+    /*
+     * IMPORTANT: File uploads (mortality images, gallery
+     * image, etc.) send a `FormData` payload. The instance
+     * above sets a default "Content-Type: application/json"
+     * header, and axios uses that header to decide how to
+     * serialize the request body.
+     *
+     * If we leave "application/json" in place, axios will
+     * JSON.stringify the FormData instead of sending it as
+     * multipart/form-data — the files are lost in the
+     * process (File objects can't be JSON-serialized) and
+     * the backend (multer) never receives them, so no image
+     * ever reaches Cloudinary. This also makes the request
+     * heavier/slower and more error-prone than it should be.
+     *
+     * Removing the Content-Type header for FormData requests
+     * lets axios/the browser set the correct
+     * "multipart/form-data; boundary=..." header automatically.
+     */
+    const isFormData =
+      typeof FormData !== "undefined" && config.data instanceof FormData;
+
+    if (isFormData && config.headers) {
+      if (typeof config.headers.delete === "function") {
+        config.headers.delete("Content-Type");
+      } else {
+        delete config.headers["Content-Type"];
       }
     }
 
