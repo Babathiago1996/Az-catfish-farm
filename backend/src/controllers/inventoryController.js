@@ -139,7 +139,7 @@ exports.deleteInventory = asyncHandler(async (req, res) => {
 
     return successResponse(res, {
       message:
-        "Inventory item deactivated successfully. Transaction history has been retained.",
+        "Inventory item and its transaction history were permanently deleted.",
       data: item,
     });
   } catch (error) {

@@ -227,6 +227,14 @@ class InventoryService {
         $regex: `^${escapeRegex(name)}$`,
         $options: "i",
       },
+
+      /*
+       * Only active items should block reuse of a name.
+       * Without this, a deleted item's name would remain
+       * permanently blocked even though it no longer shows
+       * up anywhere in the app.
+       */
+      isActive: true,
     });
 
     if (existingItem) {
@@ -495,18 +503,54 @@ class InventoryService {
 
   /*
    * ---------------------------------------------------------
-   * SOFT DELETE
+   * PERMANENT DELETE
    * ---------------------------------------------------------
+   *
+   * This used to be a soft delete (isActive = false), which
+   * kept the document (and its transaction history) sitting
+   * in MongoDB forever. That caused two visible problems:
+   *
+   * 1. Trying to create a new item with the same name as a
+   *    "deleted" one failed with "already exists", since the
+   *    old document was still there.
+   *
+   * 2. The item's old transaction history kept showing up
+   *    in Transaction History even after the item was
+   *    "deleted", since only the item was hidden, not its
+   *    transactions.
+   *
+   * This now genuinely removes the item and every
+   * transaction record tied to it from MongoDB.
    */
 
   async deleteItem(id) {
-    const item = await this.getById(id);
+    validateObjectId(id);
 
-    item.isActive = false;
+    const session = await mongoose.startSession();
 
-    await item.save();
+    try {
+      let deletedItem = null;
 
-    return item;
+      await session.withTransaction(async () => {
+        const item = await Inventory.findById(id).session(session);
+
+        if (!item) {
+          throw new Error("Inventory item not found.");
+        }
+
+        deletedItem = item.toObject();
+
+        await InventoryTransaction.deleteMany({
+          inventoryItem: item._id,
+        }).session(session);
+
+        await Inventory.deleteOne({ _id: item._id }).session(session);
+      });
+
+      return deletedItem;
+    } finally {
+      await session.endSession();
+    }
   }
 
   /*
