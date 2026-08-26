@@ -49,6 +49,38 @@ const findFeedInventory = async ({ brand, session }) => {
 };
 
 /**
+ * Undo any inventory deduction previously made by a
+ * feeding record. Finds every InventoryTransaction that
+ * references this feeding, adds its quantity back to the
+ * linked inventory item, then removes the transaction —
+ * used by both updateFeeding (before recomputing against
+ * the new data) and deleteFeeding.
+ */
+const reverseFeedingInventory = async ({ feedingId, session }) => {
+  const transactions = await InventoryTransaction.find({
+    referenceType: "feeding",
+    referenceId: feedingId,
+  }).session(session);
+
+  for (const transaction of transactions) {
+    const inventoryItem = await Inventory.findById(
+      transaction.inventoryItem,
+    ).session(session);
+
+    if (inventoryItem) {
+      inventoryItem.quantity =
+        Number(inventoryItem.quantity || 0) + Number(transaction.quantity || 0);
+
+      await inventoryItem.save({ session });
+    }
+
+    await InventoryTransaction.deleteOne({
+      _id: transaction._id,
+    }).session(session);
+  }
+};
+
+/**
  * Create a feeding record and deduct the consumed feed
  * from inventory when a matching inventory item exists.
  */
@@ -349,15 +381,356 @@ const createFeeding = async ({ data, ipAddress, userAgent }) => {
 };
 
 /**
+ * Update a feeding record.
+ *
+ * Reverses whatever inventory deduction the record
+ * previously made, then recomputes the deduction against
+ * the new data — same rules as createFeeding (unit must
+ * match, enough stock must be available).
+ */
+const updateFeeding = async ({ id, data, ipAddress, userAgent }) => {
+  if (!mongoose.isValidObjectId(id)) {
+    return {
+      success: false,
+      reason: "NOT_FOUND",
+    };
+  }
+
+  if (!mongoose.isValidObjectId(data.pond)) {
+    return {
+      success: false,
+      reason: "POND_NOT_FOUND",
+    };
+  }
+
+  const pond = await Pond.findById(data.pond);
+
+  if (!pond) {
+    return {
+      success: false,
+      reason: "POND_NOT_FOUND",
+    };
+  }
+
+  if (pond.status === "inactive" || pond.status === "maintenance") {
+    return {
+      success: false,
+      reason: "POND_UNAVAILABLE",
+    };
+  }
+
+  const quantity = Number(data.quantityUsed);
+
+  if (!Number.isFinite(quantity) || quantity <= 0) {
+    return {
+      success: false,
+      reason: "INVALID_QUANTITY",
+    };
+  }
+
+  const session = await mongoose.startSession();
+
+  try {
+    let updatedFeedingId = null;
+    let inventoryUpdated = false;
+    let remainingFeed = null;
+
+    await session.withTransaction(async () => {
+      const feeding = await FeedingRecord.findById(id).session(session);
+
+      if (!feeding) {
+        const error = new Error("Feeding record not found.");
+
+        error.code = "NOT_FOUND";
+
+        throw error;
+      }
+
+      /*
+       * Undo whatever this record previously deducted so we
+       * can cleanly recompute it against the new data below,
+       * whether the brand, quantity, or both changed.
+       */
+      await reverseFeedingInventory({
+        feedingId: feeding._id,
+        session,
+      });
+
+      const inventoryItem = await findFeedInventory({
+        brand: data.feedBrand,
+        session,
+      });
+
+      if (inventoryItem) {
+        const inventoryUnit = String(inventoryItem.unit || "")
+          .trim()
+          .toLowerCase();
+
+        const feedingUnit = String(data.quantityUnit || "kg")
+          .trim()
+          .toLowerCase();
+
+        if (inventoryUnit !== feedingUnit) {
+          const error = new Error("FEED_UNIT_MISMATCH");
+
+          error.code = "FEED_UNIT_MISMATCH";
+          error.inventoryUnit = inventoryUnit;
+          error.feedingUnit = feedingUnit;
+
+          throw error;
+        }
+
+        const available = Number(inventoryItem.quantity || 0);
+
+        if (available < quantity) {
+          const error = new Error("INSUFFICIENT_FEED");
+
+          error.code = "INSUFFICIENT_FEED";
+          error.available = available;
+
+          throw error;
+        }
+
+        const previousQuantity = available;
+        const newQuantity = previousQuantity - quantity;
+
+        inventoryItem.quantity = newQuantity;
+
+        await inventoryItem.save({ session });
+
+        await InventoryTransaction.create(
+          [
+            {
+              inventoryItem: inventoryItem._id,
+
+              transactionType: "stock_out",
+
+              quantity,
+
+              previousQuantity,
+
+              newQuantity,
+
+              unitCost: Number(inventoryItem.unitCost || 0),
+
+              referenceType: "feeding",
+
+              referenceId: feeding._id,
+
+              notes: `Feed consumed by ${pond.name}.`,
+            },
+          ],
+          {
+            session,
+          },
+        );
+
+        remainingFeed = newQuantity;
+        inventoryUpdated = true;
+      } else {
+        remainingFeed = null;
+        inventoryUpdated = false;
+      }
+
+      feeding.date = data.date || feeding.date;
+      feeding.pond = pond._id;
+      feeding.feedBrand = data.feedBrand;
+      feeding.feedType = data.feedType;
+      feeding.feedSize = data.feedSize;
+      feeding.feedSizeUnit = data.feedSizeUnit || "mm";
+      feeding.quantityUsed = quantity;
+      feeding.quantityUnit = data.quantityUnit || "kg";
+      feeding.feedingTime = data.feedingTime;
+      feeding.cost = Number(data.cost || 0);
+      feeding.estimatedBiomassBeforeFeeding =
+        data.estimatedBiomassBeforeFeeding ?? null;
+      feeding.notes = data.notes || "";
+
+      await feeding.save({ session });
+
+      await ActivityLog.create(
+        [
+          {
+            action: "update",
+
+            entityType: "FeedingRecord",
+
+            entityId: feeding._id,
+
+            description: `Feeding record for pond "${pond.name}" was updated.`,
+
+            metadata: {
+              pondId: feeding.pond,
+
+              quantityUsed: quantity,
+
+              quantityUnit: feeding.quantityUnit,
+
+              feedBrand: feeding.feedBrand,
+
+              feedType: feeding.feedType,
+
+              inventoryUpdated,
+            },
+
+            ipAddress: ipAddress || "",
+
+            userAgent: userAgent || "",
+          },
+        ],
+        {
+          session,
+        },
+      );
+
+      updatedFeedingId = feeding._id;
+    });
+
+    const updatedFeeding = await FeedingRecord.findById(updatedFeedingId)
+      .populate("pond", "name pondNumber status")
+      .lean();
+
+    return {
+      success: true,
+
+      feeding: {
+        ...updatedFeeding,
+        inventoryUpdated,
+      },
+
+      remainingFeed,
+
+      inventoryUpdated,
+    };
+  } catch (error) {
+    if (error.code === "NOT_FOUND") {
+      return {
+        success: false,
+        reason: "NOT_FOUND",
+      };
+    }
+
+    if (error.code === "INSUFFICIENT_FEED") {
+      return {
+        success: false,
+        reason: "INSUFFICIENT_FEED",
+        available: error.available,
+      };
+    }
+
+    if (error.code === "FEED_UNIT_MISMATCH") {
+      return {
+        success: false,
+        reason: "FEED_UNIT_MISMATCH",
+        inventoryUnit: error.inventoryUnit,
+        feedingUnit: error.feedingUnit,
+      };
+    }
+
+    throw error;
+  } finally {
+    await session.endSession();
+  }
+};
+
+/**
+ * Delete a feeding record, restoring any feed quantity it
+ * had previously deducted from inventory.
+ */
+const deleteFeeding = async ({ id, ipAddress, userAgent }) => {
+  if (!mongoose.isValidObjectId(id)) {
+    return {
+      success: false,
+      reason: "NOT_FOUND",
+    };
+  }
+
+  const session = await mongoose.startSession();
+
+  try {
+    let deletedFeeding = null;
+
+    await session.withTransaction(async () => {
+      const feeding = await FeedingRecord.findById(id).session(session);
+
+      if (!feeding) {
+        const error = new Error("Feeding record not found.");
+
+        error.code = "NOT_FOUND";
+
+        throw error;
+      }
+
+      await reverseFeedingInventory({
+        feedingId: feeding._id,
+        session,
+      });
+
+      deletedFeeding = {
+        _id: feeding._id,
+        pond: feeding.pond,
+        feedBrand: feeding.feedBrand,
+        quantityUsed: feeding.quantityUsed,
+        quantityUnit: feeding.quantityUnit,
+      };
+
+      await FeedingRecord.deleteOne({ _id: feeding._id }).session(session);
+
+      await ActivityLog.create(
+        [
+          {
+            action: "delete",
+
+            entityType: "FeedingRecord",
+
+            entityId: feeding._id,
+
+            description: `Feeding record of ${feeding.quantityUsed} ${feeding.quantityUnit} was deleted.`,
+
+            metadata: {
+              pondId: feeding.pond,
+
+              quantityUsed: feeding.quantityUsed,
+
+              quantityUnit: feeding.quantityUnit,
+
+              feedBrand: feeding.feedBrand,
+            },
+
+            ipAddress: ipAddress || "",
+
+            userAgent: userAgent || "",
+          },
+        ],
+        {
+          session,
+        },
+      );
+    });
+
+    return {
+      success: true,
+
+      feeding: deletedFeeding,
+    };
+  } catch (error) {
+    if (error.code === "NOT_FOUND") {
+      return {
+        success: false,
+        reason: "NOT_FOUND",
+      };
+    }
+
+    throw error;
+  } finally {
+    await session.endSession();
+  }
+};
+
+/**
  * List feeding records.
  */
-const listFeedings = async ({
-  pond,
-  from,
-  to,
-  page = 1,
-  limit = 30,
-}) => {
+const listFeedings = async ({ pond, from, to, page = 1, limit = 30 }) => {
   const currentPage = Math.max(Number(page) || 1, 1);
 
   const pageSize = Math.min(Math.max(Number(limit) || 30, 1), 100);
@@ -489,6 +862,8 @@ const getTodayConsumption = async () => {
 
 module.exports = {
   createFeeding,
+  updateFeeding,
+  deleteFeeding,
   listFeedings,
   getFeedingById,
   getTodayConsumption,

@@ -149,6 +149,114 @@ const getFeeding = asyncHandler(async (req, res) => {
   });
 });
 
+const updateFeeding = asyncHandler(async (req, res) => {
+  if (!validateRequest(req, res)) {
+    return;
+  }
+
+  const result = await feedingService.updateFeeding({
+    id: req.params.id,
+    data: req.body,
+    ...requestMetadata(req),
+  });
+
+  if (!result.success) {
+    switch (result.reason) {
+      case "NOT_FOUND":
+        return errorResponse(res, {
+          statusCode: 404,
+          message: "Feeding record not found.",
+        });
+
+      case "POND_NOT_FOUND":
+        return errorResponse(res, {
+          statusCode: 404,
+          message: "The selected pond was not found.",
+        });
+
+      case "POND_UNAVAILABLE":
+        return errorResponse(res, {
+          statusCode: 409,
+          message:
+            "Feeding cannot be recorded for a pond that is inactive or under maintenance.",
+        });
+
+      case "INSUFFICIENT_FEED":
+        return errorResponse(res, {
+          statusCode: 409,
+          message: "There is not enough feed available in inventory.",
+          errors: [
+            {
+              field: "quantityUsed",
+              message: `Available quantity: ${result.available}.`,
+            },
+          ],
+        });
+
+      case "FEED_UNIT_MISMATCH":
+        return errorResponse(res, {
+          statusCode: 409,
+          message:
+            "The feeding quantity unit does not match the inventory unit.",
+          errors: [
+            {
+              field: "quantityUnit",
+              message: `Inventory uses "${result.inventoryUnit}" but feeding uses "${result.feedingUnit}".`,
+            },
+          ],
+        });
+
+      case "INVALID_QUANTITY":
+        return errorResponse(res, {
+          statusCode: 422,
+          message: "Quantity used must be greater than zero.",
+        });
+
+      default:
+        return errorResponse(res, {
+          statusCode: 400,
+          message: "Unable to update feeding record.",
+        });
+    }
+  }
+
+  return successResponse(res, {
+    statusCode: 200,
+    message: "Feeding record updated successfully.",
+    data: {
+      feeding: result.feeding,
+      remainingFeed: result.remainingFeed,
+      inventoryUpdated: result.inventoryUpdated,
+    },
+  });
+});
+
+const deleteFeeding = asyncHandler(async (req, res) => {
+  if (!validateRequest(req, res)) {
+    return;
+  }
+
+  const result = await feedingService.deleteFeeding({
+    id: req.params.id,
+    ...requestMetadata(req),
+  });
+
+  if (!result.success) {
+    return errorResponse(res, {
+      statusCode: 404,
+      message: "Feeding record not found.",
+    });
+  }
+
+  return successResponse(res, {
+    statusCode: 200,
+    message: "Feeding record deleted and inventory restored successfully.",
+    data: {
+      feeding: result.feeding,
+    },
+  });
+});
+
 const getTodayConsumption = asyncHandler(async (req, res) => {
   const summary = await feedingService.getTodayConsumption();
 
@@ -165,5 +273,7 @@ module.exports = {
   createFeeding,
   listFeedings,
   getFeeding,
+  updateFeeding,
+  deleteFeeding,
   getTodayConsumption,
 };

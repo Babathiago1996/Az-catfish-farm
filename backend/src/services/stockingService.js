@@ -217,6 +217,302 @@ const createStocking = async ({ data, ipAddress, userAgent }) => {
 
 /*
 |--------------------------------------------------------------------------
+| Update Stocking
+|--------------------------------------------------------------------------
+*/
+
+const updateStocking = async ({ id, data, ipAddress, userAgent }) => {
+  if (!mongoose.isValidObjectId(id)) {
+    return {
+      success: false,
+      reason: "NOT_FOUND",
+    };
+  }
+
+  if (!data.pond || !mongoose.isValidObjectId(data.pond)) {
+    return {
+      success: false,
+      reason: "POND_NOT_FOUND",
+    };
+  }
+
+  const quantity = Number(data.fingerlingQuantity);
+
+  const cost = Number(data.cost);
+
+  if (!Number.isFinite(quantity) || quantity <= 0) {
+    return {
+      success: false,
+      reason: "INVALID_QUANTITY",
+    };
+  }
+
+  if (!Number.isFinite(cost) || cost < 0) {
+    return {
+      success: false,
+      reason: "INVALID_COST",
+    };
+  }
+
+  const session = await mongoose.startSession();
+
+  let updatedStockingId = null;
+
+  try {
+    await session.withTransaction(async () => {
+      const stocking = await Stocking.findById(id).session(session);
+
+      if (!stocking) {
+        const error = new Error("Stocking record not found.");
+
+        error.code = "NOT_FOUND";
+
+        throw error;
+      }
+
+      const oldPondId = String(stocking.pond);
+
+      const newPondId = String(data.pond);
+
+      const oldQuantity = stocking.fingerlingQuantity;
+
+      const newPond = await Pond.findById(newPondId).session(session);
+
+      if (!newPond) {
+        const error = new Error("The selected pond was not found.");
+
+        error.code = "POND_NOT_FOUND";
+
+        throw error;
+      }
+
+      if (oldPondId === newPondId) {
+        /*
+         * Same pond: just apply the difference between the
+         * old and new fingerling quantity. Clamped at 0 so a
+         * correction never leaves the pond with a negative
+         * count, matching the same defensive pattern used
+         * for pond stock elsewhere in the app.
+         */
+        const delta = quantity - oldQuantity;
+
+        newPond.currentFishCount = Math.max(
+          0,
+          Number(newPond.currentFishCount || 0) + delta,
+        );
+
+        await newPond.save({ session });
+      } else {
+        /*
+         * Pond changed: reverse the original quantity from
+         * the old pond, then apply the new quantity to the
+         * newly selected pond.
+         */
+        const oldPond = await Pond.findById(oldPondId).session(session);
+
+        if (oldPond) {
+          oldPond.currentFishCount = Math.max(
+            0,
+            Number(oldPond.currentFishCount || 0) - oldQuantity,
+          );
+
+          await oldPond.save({ session });
+        }
+
+        newPond.currentFishCount =
+          Number(newPond.currentFishCount || 0) + quantity;
+
+        await newPond.save({ session });
+      }
+
+      stocking.stockingDate = data.stockingDate;
+      stocking.pond = newPondId;
+      stocking.fingerlingQuantity = quantity;
+      stocking.fingerlingSize = data.fingerlingSize;
+      stocking.fingerlingSizeUnit = data.fingerlingSizeUnit || "cm";
+      stocking.supplier = data.supplier || "";
+      stocking.cost = cost;
+      stocking.expectedHarvestDate = data.expectedHarvestDate || null;
+      stocking.initialWeight = Number(data.initialWeight) || 0;
+      stocking.notes = data.notes || "";
+
+      await stocking.save({ session });
+
+      await ActivityLog.create(
+        [
+          {
+            action: "update",
+
+            entityType: "Stocking",
+
+            entityId: stocking._id,
+
+            description: `Stocking record of ${quantity} fingerlings was updated.`,
+
+            metadata: {
+              pondId: stocking.pond,
+
+              quantity,
+
+              cost,
+
+              supplier: stocking.supplier,
+
+              stockingDate: stocking.stockingDate,
+            },
+
+            ipAddress: ipAddress || "",
+
+            userAgent: userAgent || "",
+          },
+        ],
+        {
+          session,
+        },
+      );
+
+      updatedStockingId = stocking._id;
+    });
+
+    const updatedStocking = await Stocking.findById(updatedStockingId)
+      .populate(
+        "pond",
+        "name pondName pondNumber pondType pondSize status currentFishCount currentAverageWeight",
+      )
+      .lean();
+
+    return {
+      success: true,
+
+      stocking: updatedStocking,
+    };
+  } catch (error) {
+    if (error.code === "NOT_FOUND") {
+      return {
+        success: false,
+        reason: "NOT_FOUND",
+      };
+    }
+
+    if (error.code === "POND_NOT_FOUND") {
+      return {
+        success: false,
+        reason: "POND_NOT_FOUND",
+      };
+    }
+
+    throw error;
+  } finally {
+    await session.endSession();
+  }
+};
+
+/*
+|--------------------------------------------------------------------------
+| Delete Stocking
+|--------------------------------------------------------------------------
+*/
+
+const deleteStocking = async ({ id, ipAddress, userAgent }) => {
+  if (!mongoose.isValidObjectId(id)) {
+    return {
+      success: false,
+      reason: "NOT_FOUND",
+    };
+  }
+
+  const session = await mongoose.startSession();
+
+  try {
+    let deletedStocking = null;
+
+    await session.withTransaction(async () => {
+      const stocking = await Stocking.findById(id).session(session);
+
+      if (!stocking) {
+        const error = new Error("Stocking record not found.");
+
+        error.code = "NOT_FOUND";
+
+        throw error;
+      }
+
+      const pond = await Pond.findById(stocking.pond).session(session);
+
+      if (pond) {
+        /*
+         * Reverse this stocking's contribution to the pond's
+         * fish count. Clamped at 0 for the same reason as
+         * updateStocking above.
+         */
+        pond.currentFishCount = Math.max(
+          0,
+          Number(pond.currentFishCount || 0) - stocking.fingerlingQuantity,
+        );
+
+        await pond.save({ session });
+      }
+
+      deletedStocking = {
+        _id: stocking._id,
+        pond: stocking.pond,
+        fingerlingQuantity: stocking.fingerlingQuantity,
+        stockingDate: stocking.stockingDate,
+      };
+
+      await Stocking.deleteOne({ _id: stocking._id }).session(session);
+
+      await ActivityLog.create(
+        [
+          {
+            action: "delete",
+
+            entityType: "Stocking",
+
+            entityId: stocking._id,
+
+            description: `Stocking record of ${stocking.fingerlingQuantity} fingerlings was deleted.`,
+
+            metadata: {
+              pondId: stocking.pond,
+
+              quantity: stocking.fingerlingQuantity,
+
+              stockingDate: stocking.stockingDate,
+            },
+
+            ipAddress: ipAddress || "",
+
+            userAgent: userAgent || "",
+          },
+        ],
+        {
+          session,
+        },
+      );
+    });
+
+    return {
+      success: true,
+
+      stocking: deletedStocking,
+    };
+  } catch (error) {
+    if (error.code === "NOT_FOUND") {
+      return {
+        success: false,
+        reason: "NOT_FOUND",
+      };
+    }
+
+    throw error;
+  } finally {
+    await session.endSession();
+  }
+};
+
+/*
+|--------------------------------------------------------------------------
 | List Stocking
 |--------------------------------------------------------------------------
 */
@@ -303,6 +599,8 @@ const getStockingById = async (id) => {
 
 module.exports = {
   createStocking,
+  updateStocking,
+  deleteStocking,
   listStocking,
   getStockingById,
 };

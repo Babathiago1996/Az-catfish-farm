@@ -68,6 +68,19 @@ const createStockingValidators = [
   notesValidation,
 ];
 
+const updateStockingValidators = [
+  stockingDateValidation,
+  pondValidation,
+  quantityValidation,
+  fingerlingSizeValidation,
+  fingerlingSizeUnitValidation,
+  supplierValidation,
+  costValidation,
+  expectedHarvestDateValidation,
+  initialWeightValidation,
+  notesValidation,
+];
+
 const stockingIdValidators = [objectIdValidation("id")];
 
 const listStockingValidators = [
@@ -92,6 +105,7 @@ const listStockingValidators = [
 
 module.exports = {
   createStockingValidators,
+  updateStockingValidators,
   stockingIdValidators,
   listStockingValidators,
 };

@@ -8,6 +8,7 @@ const stockingController = require("../controllers/stockingController");
 
 const {
   createStockingValidators,
+  updateStockingValidators,
   stockingIdValidators,
   listStockingValidators
 } = require("../validators/stockingValidators");
@@ -32,6 +33,19 @@ router.get(
   "/:id",
   stockingIdValidators,
   stockingController.getStocking
+);
+
+router.patch(
+  "/:id",
+  stockingIdValidators,
+  updateStockingValidators,
+  stockingController.updateStocking
+);
+
+router.delete(
+  "/:id",
+  stockingIdValidators,
+  stockingController.deleteStocking
 );
 
 module.exports = router;

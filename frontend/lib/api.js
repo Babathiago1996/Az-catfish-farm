@@ -78,6 +78,10 @@ export const api = {
     get: (id) => get(`/stocking/${id}`),
 
     create: (data) => post("/stocking", data),
+
+    update: (id, data) => patch(`/stocking/${id}`, data),
+
+    remove: (id) => del(`/stocking/${id}`),
   },
 
   feeding: {
@@ -88,6 +92,10 @@ export const api = {
     get: (id) => get(`/feeding/${id}`),
 
     create: (data) => post("/feeding", data),
+
+    update: (id, data) => patch(`/feeding/${id}`, data),
+
+    remove: (id) => del(`/feeding/${id}`),
   },
 
   water: {

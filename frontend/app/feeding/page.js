@@ -1,7 +1,15 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
-import { Plus, Utensils, Fish, PackageCheck } from "lucide-react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  Plus,
+  Utensils,
+  Fish,
+  PackageCheck,
+  Edit3,
+  Trash2,
+  Loader2,
+} from "lucide-react";
 import { useForm } from "react-hook-form";
 
 import { AdminLayout } from "@/components/shared/admin-layout";
@@ -48,6 +56,8 @@ export default function Feeding() {
   const [pond, setPond] = useState("");
   const [open, setOpen] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [editing, setEditing] = useState(null);
+  const [deletingId, setDeletingId] = useState(null);
 
   /*
    * ---------------------------------------------------------
@@ -167,7 +177,12 @@ export default function Feeding() {
    * FORM
    * ---------------------------------------------------------
    */
-  const { register, handleSubmit, reset } = useForm({
+  const {
+    register,
+    handleSubmit,
+    reset,
+    formState: { isSubmitting },
+  } = useForm({
     defaultValues: {
       date: toInputDate(),
       pond: "",
@@ -183,6 +198,12 @@ export default function Feeding() {
       notes: "",
     },
   });
+
+  /*
+   * Synchronous guard against double-submission, same fix
+   * as applied to Sales/Expenses/Media/Stocking.
+   */
+  const isSubmittingRef = useRef(false);
 
   /*
    * ---------------------------------------------------------
