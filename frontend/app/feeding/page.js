@@ -10,14 +10,13 @@ import {
   Trash2,
   Loader2,
   RefreshCw,
-  X,
+  Search,
 } from "lucide-react";
 import { useForm } from "react-hook-form";
 
 import { AdminLayout } from "@/components/shared/admin-layout";
 import { PageHeader } from "@/components/shared/page-header";
 import { MetricCard } from "@/components/shared/metric-card";
-
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -40,9 +39,11 @@ import {
 
 import { toast } from "sonner";
 
-/* =========================================================
-   DEFAULT FORM VALUES
-   ========================================================= */
+/* ============================================================
+   CONSTANTS
+   ============================================================ */
+
+const PAGE_SIZE = 30;
 
 const DEFAULT_FORM_VALUES = {
   date: toInputDate(),
@@ -59,10 +60,13 @@ const DEFAULT_FORM_VALUES = {
   notes: "",
 };
 
-/* =========================================================
+/* ============================================================
    HELPERS
-   ========================================================= */
+   ============================================================ */
 
+/**
+ * Convert an API error into something useful for the user.
+ */
 const getErrorMessage = (error, fallback) => {
   if (!error) {
     return fallback;
@@ -79,73 +83,75 @@ const getErrorMessage = (error, fallback) => {
   return fallback;
 };
 
-const normalizeDateForInput = (value) => {
-  if (!value) {
-    return toInputDate();
-  }
+/**
+ * Normalize the feeding list response.
+ *
+ * Backend returns:
+ *
+ * {
+ *   records: [],
+ *   summary: {},
+ *   pagination: {}
+ * }
+ */
+const normalizeFeedingList = (response) => {
+  return {
+    records: Array.isArray(response?.records) ? response.records : [],
 
-  try {
-    const date = new Date(value);
+    summary: response?.summary || {
+      totalQuantity: 0,
+      totalCost: 0,
+    },
 
-    if (Number.isNaN(date.getTime())) {
-      return toInputDate();
-    }
-
-    return date.toISOString().slice(0, 10);
-  } catch {
-    return toInputDate();
-  }
+    pagination: response?.pagination || {
+      page: 1,
+      limit: PAGE_SIZE,
+      total: 0,
+      pages: 0,
+    },
+  };
 };
 
-const normalizeFormValues = (record) => ({
-  date: normalizeDateForInput(record?.date),
+/**
+ * Normalize pond response because the pond endpoint may
+ * return { ponds: [] } depending on the controller.
+ */
+const normalizePonds = (response) => {
+  if (Array.isArray(response)) {
+    return response;
+  }
 
-  pond:
-    typeof record?.pond === "object"
-      ? record?.pond?._id || ""
-      : record?.pond || "",
+  if (Array.isArray(response?.ponds)) {
+    return response.ponds;
+  }
 
-  feedBrand: record?.feedBrand || "",
+  if (Array.isArray(response?.records)) {
+    return response.records;
+  }
 
-  feedType: record?.feedType || "grower",
+  return [];
+};
 
-  feedSize:
-    record?.feedSize !== undefined && record?.feedSize !== null
-      ? record.feedSize
-      : 3,
+/**
+ * Safely convert a value to number.
+ */
+const numberValue = (value, fallback = 0) => {
+  const parsed = Number(value);
 
-  feedSizeUnit: record?.feedSizeUnit || "mm",
+  return Number.isFinite(parsed) ? parsed : fallback;
+};
 
-  quantityUsed:
-    record?.quantityUsed !== undefined && record?.quantityUsed !== null
-      ? record.quantityUsed
-      : 1,
-
-  quantityUnit: record?.quantityUnit || "kg",
-
-  feedingTime: record?.feedingTime || "08:00",
-
-  cost: record?.cost !== undefined && record?.cost !== null ? record.cost : 0,
-
-  estimatedBiomassBeforeFeeding:
-    record?.estimatedBiomassBeforeFeeding !== null &&
-    record?.estimatedBiomassBeforeFeeding !== undefined
-      ? record.estimatedBiomassBeforeFeeding
-      : "",
-
-  notes: record?.notes || "",
-});
-
-/* =========================================================
+/* ============================================================
    COMPONENT
-   ========================================================= */
+   ============================================================ */
 
 export default function Feeding() {
-  /* -------------------------------------------------------
+  /* ----------------------------------------------------------
      DATA
-  ------------------------------------------------------- */
+     ---------------------------------------------------------- */
 
   const [rows, setRows] = useState([]);
+
   const [ponds, setPonds] = useState([]);
 
   const [today, setToday] = useState({
@@ -153,56 +159,61 @@ export default function Feeding() {
     cost: 0,
   });
 
+  /* ----------------------------------------------------------
+     PAGINATION
+     ---------------------------------------------------------- */
+
   const [pagination, setPagination] = useState({
     page: 1,
-    limit: 30,
+    limit: PAGE_SIZE,
     total: 0,
     pages: 0,
   });
 
-  /* -------------------------------------------------------
-     FILTERS
-  ------------------------------------------------------- */
-
   const [page, setPage] = useState(1);
+
+  /* ----------------------------------------------------------
+     FILTERS
+     ---------------------------------------------------------- */
+
   const [pond, setPond] = useState("");
 
-  /* -------------------------------------------------------
+  /* ----------------------------------------------------------
      UI STATE
-  ------------------------------------------------------- */
+     ---------------------------------------------------------- */
 
   const [open, setOpen] = useState(false);
-  const [editing, setEditing] = useState(null);
 
   const [loading, setLoading] = useState(false);
-  const [pondsLoading, setPondsLoading] = useState(false);
+
+  const [editing, setEditing] = useState(null);
 
   const [deletingId, setDeletingId] = useState(null);
 
   const [refreshing, setRefreshing] = useState(false);
 
-  /* -------------------------------------------------------
-     DOUBLE SUBMISSION GUARD
-  ------------------------------------------------------- */
+  /* ----------------------------------------------------------
+     DOUBLE-SUBMISSION GUARD
+     ---------------------------------------------------------- */
 
   const isSubmittingRef = useRef(false);
 
-  /* =======================================================
+  /* ----------------------------------------------------------
      FORM
-     ======================================================= */
+     ---------------------------------------------------------- */
 
   const {
     register,
     handleSubmit,
     reset,
-    formState: { errors, isSubmitting },
+    formState: { isSubmitting },
   } = useForm({
     defaultValues: DEFAULT_FORM_VALUES,
   });
 
-  /* =======================================================
-     LOAD FEEDING DATA
-     ======================================================= */
+  /* ==========================================================
+     LOAD FEEDING RECORDS + TODAY SUMMARY
+     ========================================================== */
 
   const load = useCallback(
     async ({ silent = false } = {}) => {
@@ -216,59 +227,36 @@ export default function Feeding() {
         const [listResponse, todayResponse] = await Promise.all([
           api.feeding.list({
             page,
-            limit: 30,
+            limit: PAGE_SIZE,
             ...(pond ? { pond } : {}),
           }),
 
           api.feeding.today(),
         ]);
 
-        /* -------------------------------------------------
-           LIST RESPONSE
-           -------------------------------------------------
+        /* ----------------------------------------------------
+           LIST
+           ---------------------------------------------------- */
 
-           Backend returns:
+        const list = normalizeFeedingList(listResponse);
 
-           {
-             records: [],
-             summary: {
-               totalQuantity,
-               totalCost
-             },
-             pagination: {}
-           }
-        */
+        setRows(list.records);
 
-        setRows(
-          Array.isArray(listResponse?.records) ? listResponse.records : [],
-        );
+        setPagination({
+          page: numberValue(list.pagination?.page, page),
+          limit: numberValue(list.pagination?.limit, PAGE_SIZE),
+          total: numberValue(list.pagination?.total, 0),
+          pages: numberValue(list.pagination?.pages, 0),
+        });
 
-        setPagination(
-          listResponse?.pagination || {
-            page,
-            limit: 30,
-            total: 0,
-            pages: 0,
-          },
-        );
-
-        /* -------------------------------------------------
-           TODAY RESPONSE
-
-           Backend returns:
-
-           {
-             summary: {
-               quantity,
-               cost
-             }
-           }
-        */
+        /* ----------------------------------------------------
+           TODAY
+           ---------------------------------------------------- */
 
         setToday({
-          quantity: Number(todayResponse?.summary?.quantity || 0),
+          quantity: numberValue(todayResponse?.summary?.quantity, 0),
 
-          cost: Number(todayResponse?.summary?.cost || 0),
+          cost: numberValue(todayResponse?.summary?.cost, 0),
         });
       } catch (error) {
         toast.error(getErrorMessage(error, "Unable to load feeding records."));
@@ -280,139 +268,121 @@ export default function Feeding() {
     [page, pond],
   );
 
-  /* =======================================================
+  /* ==========================================================
      LOAD PONDS
-     ======================================================= */
+     ========================================================== */
 
   const loadPonds = useCallback(async () => {
     try {
-      setPondsLoading(true);
-
       const response = await api.ponds.list({
         limit: 100,
       });
 
-      setPonds(Array.isArray(response?.ponds) ? response.ponds : []);
+      setPonds(normalizePonds(response));
     } catch (error) {
       console.error("Unable to load ponds:", error);
 
       toast.error(getErrorMessage(error, "Unable to load ponds."));
-    } finally {
-      setPondsLoading(false);
     }
   }, []);
 
-  /* =======================================================
-     INITIAL LOAD
-     ======================================================= */
+  /* ==========================================================
+     INITIAL DATA
+     ========================================================== */
 
   useEffect(() => {
     loadPonds();
   }, [loadPonds]);
 
-  /* =======================================================
-     LOAD RECORDS WHEN FILTER/PAGE CHANGES
-     ======================================================= */
+  /* ==========================================================
+     LOAD FEEDING DATA WHEN FILTER/PAGE CHANGES
+     ========================================================== */
 
   useEffect(() => {
     load();
   }, [load]);
 
-  /* =======================================================
+  /* ==========================================================
      RESET FORM
-     ======================================================= */
+     ========================================================== */
 
-  const resetForm = () => {
+  const resetFeedingForm = useCallback(() => {
     reset({
       ...DEFAULT_FORM_VALUES,
       date: toInputDate(),
     });
-  };
+  }, [reset]);
 
-  /* =======================================================
+  /* ==========================================================
      OPEN CREATE DIALOG
-     ======================================================= */
+     ========================================================== */
 
-  const openCreateDialog = () => {
+  const openRecordDialog = () => {
     setEditing(null);
 
-    resetForm();
+    resetFeedingForm();
 
     setOpen(true);
   };
 
-  /* =======================================================
+  /* ==========================================================
      OPEN EDIT DIALOG
-     ======================================================= */
+     ========================================================== */
 
   const openEditDialog = (record) => {
-    if (!record) {
+    if (!record?._id) {
+      toast.error("Invalid feeding record.");
+
       return;
     }
 
     setEditing(record);
 
-    reset(normalizeFormValues(record));
+    reset({
+      date: record.date ? toInputDate(record.date) : toInputDate(),
+
+      pond:
+        typeof record.pond === "object"
+          ? record.pond?._id || ""
+          : record.pond || "",
+
+      feedBrand: record.feedBrand || "",
+
+      feedType: record.feedType || "grower",
+
+      feedSize:
+        record.feedSize !== undefined && record.feedSize !== null
+          ? record.feedSize
+          : 3,
+
+      feedSizeUnit: record.feedSizeUnit || "mm",
+
+      quantityUsed:
+        record.quantityUsed !== undefined && record.quantityUsed !== null
+          ? record.quantityUsed
+          : 1,
+
+      quantityUnit: record.quantityUnit || "kg",
+
+      feedingTime: record.feedingTime || "08:00",
+
+      cost: record.cost !== undefined && record.cost !== null ? record.cost : 0,
+
+      estimatedBiomassBeforeFeeding:
+        record.estimatedBiomassBeforeFeeding !== undefined &&
+        record.estimatedBiomassBeforeFeeding !== null
+          ? record.estimatedBiomassBeforeFeeding
+          : "",
+
+      notes: record.notes || "",
+    });
 
     setOpen(true);
   };
 
-  /* =======================================================
-     CLOSE DIALOG
-     ======================================================= */
-
-  const closeDialog = () => {
-    if (isSubmittingRef.current || isSubmitting) {
-      return;
-    }
-
-    setOpen(false);
-
-    setEditing(null);
-
-    resetForm();
-  };
-
-  /* =======================================================
-     BUILD PAYLOAD
-     ======================================================= */
-
-  const buildPayload = (data) => {
-    return {
-      date: data.date,
-
-      pond: data.pond,
-
-      feedBrand: String(data.feedBrand || "").trim(),
-
-      feedType: data.feedType,
-
-      feedSize: Number(data.feedSize),
-
-      feedSizeUnit: data.feedSizeUnit || "mm",
-
-      quantityUsed: Number(data.quantityUsed),
-
-      quantityUnit: data.quantityUnit || "kg",
-
-      feedingTime: data.feedingTime,
-
-      cost: Number(data.cost || 0),
-
-      estimatedBiomassBeforeFeeding:
-        data.estimatedBiomassBeforeFeeding === "" ||
-        data.estimatedBiomassBeforeFeeding === null ||
-        data.estimatedBiomassBeforeFeeding === undefined
-          ? null
-          : Number(data.estimatedBiomassBeforeFeeding),
-
-      notes: String(data.notes || "").trim(),
-    };
-  };
-
-  /* =======================================================
-     CREATE / UPDATE
-     ======================================================= */
+  /* ==========================================================
+     SUBMIT CREATE / UPDATE
+     ========================================================== */
 
   const submit = async (data) => {
     if (isSubmittingRef.current) {
@@ -422,69 +392,74 @@ export default function Feeding() {
     isSubmittingRef.current = true;
 
     try {
-      const payload = buildPayload(data);
+      /* ------------------------------------------------------
+         BUILD PAYLOAD
+         ------------------------------------------------------ */
 
-      /* -----------------------------------------------
-         Extra client-side safety
-      ------------------------------------------------ */
+      const payload = {
+        date: data.date,
 
-      if (!payload.pond) {
-        toast.error("Please select a pond.");
-        return;
-      }
+        pond: data.pond || null,
 
-      if (!payload.feedBrand) {
-        toast.error("Please enter the feed brand.");
-        return;
-      }
+        feedBrand: String(data.feedBrand || "").trim(),
 
-      if (!Number.isFinite(payload.quantityUsed) || payload.quantityUsed <= 0) {
-        toast.error("Quantity used must be greater than zero.");
-        return;
-      }
+        feedType: data.feedType,
 
-      if (!Number.isFinite(payload.feedSize) || payload.feedSize < 0) {
-        toast.error("Feed size must be zero or greater.");
-        return;
-      }
+        feedSize: numberValue(data.feedSize, 0),
 
-      if (!Number.isFinite(payload.cost) || payload.cost < 0) {
-        toast.error("Feed cost cannot be negative.");
-        return;
-      }
+        feedSizeUnit: data.feedSizeUnit || "mm",
 
-      /* -----------------------------------------------
-         UPDATE
-      ------------------------------------------------ */
+        quantityUsed: numberValue(data.quantityUsed, 0),
 
-      if (editing?._id) {
-        await api.feeding.update(editing._id, payload);
+        quantityUnit: data.quantityUnit || "kg",
 
-        toast.success("Feeding record updated successfully.");
-      } else {
-        /* -----------------------------------------------
+        feedingTime: data.feedingTime || "08:00",
+
+        cost: numberValue(data.cost, 0),
+
+        estimatedBiomassBeforeFeeding:
+          data.estimatedBiomassBeforeFeeding === "" ||
+          data.estimatedBiomassBeforeFeeding === null ||
+          data.estimatedBiomassBeforeFeeding === undefined
+            ? null
+            : numberValue(data.estimatedBiomassBeforeFeeding, 0),
+
+        notes: String(data.notes || "").trim(),
+      };
+
+      /* ------------------------------------------------------
          CREATE
-      ------------------------------------------------ */
+         ------------------------------------------------------ */
+
+      if (!editing) {
         await api.feeding.create(payload);
 
         toast.success("Feeding recorded successfully.");
+      } else {
+
+      /* ------------------------------------------------------
+         UPDATE
+         ------------------------------------------------------ */
+        await api.feeding.update(editing._id, payload);
+
+        toast.success("Feeding record updated successfully.");
       }
 
-      /* -----------------------------------------------
-         Close and reset
-      ------------------------------------------------ */
+      /* ------------------------------------------------------
+         CLOSE + RESET
+         ------------------------------------------------------ */
 
       setOpen(false);
 
       setEditing(null);
 
-      resetForm();
+      resetFeedingForm();
 
-      /* -----------------------------------------------
-         Reload table + today's metrics
-      ------------------------------------------------ */
+      /* ------------------------------------------------------
+         RELOAD TABLE + TODAY METRICS
+         ------------------------------------------------------ */
 
-      await load({ silent: true });
+      await load();
     } catch (error) {
       toast.error(
         getErrorMessage(
@@ -499,36 +474,48 @@ export default function Feeding() {
     }
   };
 
-  /* =======================================================
-     DELETE
-     ======================================================= */
+  /* ==========================================================
+     DELETE FEEDING
+     ========================================================== */
 
-  const deleteRecord = async (record) => {
+  const handleDelete = async (record) => {
     if (!record?._id) {
+      toast.error("Invalid feeding record.");
+
       return;
     }
 
     const confirmed = window.confirm(
-      `Delete this feeding record?\n\n${formatNumber(
+      `Delete this feeding record?\n\n${record.feedBrand || "Feed"} · ${numberValue(
         record.quantityUsed,
-        2,
-      )} ${record.quantityUnit || "kg"} of ${
-        record.feedBrand || "feed"
-      } from ${pondName(record.pond)}.\n\nAny inventory deducted by this feeding will be restored.`,
+        0,
+      )} ${record.quantityUnit || "kg"}\n\nAny inventory deduction made by this record will be restored automatically.`,
     );
 
     if (!confirmed) {
       return;
     }
 
+    if (deletingId) {
+      return;
+    }
+
     try {
       setDeletingId(record._id);
 
-      await api.feeding.delete(record._id);
+      await api.feeding.remove(record._id);
 
       toast.success("Feeding record deleted and inventory restored.");
 
-      await load({ silent: true });
+      /*
+       * If deleting the final record on a page,
+       * move back one page where appropriate.
+       */
+      if (rows.length === 1 && page > 1) {
+        setPage((currentPage) => Math.max(currentPage - 1, 1));
+      } else {
+        await load();
+      }
     } catch (error) {
       toast.error(getErrorMessage(error, "Unable to delete feeding record."));
     } finally {
@@ -536,132 +523,162 @@ export default function Feeding() {
     }
   };
 
-  /* =======================================================
-     FILTER CHANGE
-     ======================================================= */
+  /* ==========================================================
+     REFRESH
+     ========================================================== */
 
-  const handlePondChange = (event) => {
-    setPage(1);
-
-    setPond(event.target.value);
+  const handleRefresh = async () => {
+    await load({
+      silent: true,
+    });
   };
 
-  /* =======================================================
+  /* ==========================================================
+     CLOSE DIALOG
+     ========================================================== */
+
+  const handleDialogChange = (value) => {
+    /*
+     * Do not allow the dialog to close while
+     * the form is actively submitting.
+     */
+    if (isSubmittingRef.current) {
+      return;
+    }
+
+    setOpen(value);
+
+    if (!value) {
+      setEditing(null);
+
+      resetFeedingForm();
+    }
+  };
+
+  /* ==========================================================
      RENDER
-     ======================================================= */
+     ========================================================== */
 
   return (
     <AdminLayout
       title="Feeding"
-      description="Track feed usage and connect consumption to inventory"
+      description="Track feed usage and connect every feeding event to inventory."
     >
-      {/* ===================================================
-          PAGE HEADER
-      =================================================== */}
+      {/* ======================================================
+          HEADER
+          ====================================================== */}
 
       <PageHeader
         eyebrow="Production"
         title="Feeding"
-        description="Every feed event can automatically deduct a matching feed inventory item."
+        description="Record daily feeding activities, monitor consumption and automatically reconcile feed inventory."
         action={{
           label: "Record feeding",
           icon: <Plus className="h-4 w-4" />,
-          onClick: openCreateDialog,
+          onClick: openRecordDialog,
         }}
       />
 
-      {/* ===================================================
-          TODAY'S METRICS
-      =================================================== */}
+      {/* ======================================================
+          TODAY METRICS
+          ====================================================== */}
 
-      <div className="grid gap-4 sm:grid-cols-3">
+      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
         <MetricCard
-          label="Today quantity"
-          value={`${formatNumber(today?.quantity || 0, 2)} kg`}
-          sub="total feed consumed"
+          label="Today's quantity"
+          value={`${formatNumber(today.quantity, 2)} kg`}
+          sub="total feed consumed today"
           icon={Utensils}
         />
 
         <MetricCard
-          label="Today cost"
-          value={formatCurrency(today?.cost || 0)}
-          sub="recorded feeding cost"
+          label="Today's cost"
+          value={formatCurrency(today.cost)}
+          sub="recorded feeding cost today"
           icon={PackageCheck}
         />
 
         <MetricCard
-          label="Records"
-          value={formatNumber(pagination?.total || 0)}
-          sub="selected view"
+          label="Feeding records"
+          value={formatNumber(pagination.total)}
+          sub={pond ? "records for selected pond" : "records in selected view"}
           icon={Fish}
         />
       </div>
 
-      {/* ===================================================
+      {/* ======================================================
           RECORDS CARD
-      =================================================== */}
+          ====================================================== */}
 
       <Card className="mt-5 overflow-hidden">
-        {/* -------------------------------------------------
-            TOOLBAR
-        ------------------------------------------------- */}
+        {/* ----------------------------------------------------
+            FILTER BAR
+            ---------------------------------------------------- */}
 
         <div className="flex flex-col gap-3 border-b p-5 md:flex-row md:items-center md:justify-between">
           <div>
             <h2 className="text-base font-semibold">Feeding records</h2>
 
             <p className="mt-1 text-sm text-[var(--muted)]">
-              Monitor feed consumption by pond.
+              Review, edit or delete recorded feeding activities.
             </p>
           </div>
 
           <div className="flex flex-col gap-2 sm:flex-row">
-            <Select
-              value={pond}
-              onChange={handlePondChange}
-              disabled={pondsLoading}
-              className="w-full sm:w-56"
-            >
-              <option value="">All ponds</option>
+            <div className="relative">
+              <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[var(--muted)]" />
 
-              {ponds.map((p) => (
-                <option key={p._id} value={p._id}>
-                  {p.name}
-                  {p.pondNumber ? ` · #${p.pondNumber}` : ""}
-                </option>
-              ))}
-            </Select>
+              <Select
+                value={pond}
+                onChange={(event) => {
+                  setPage(1);
+
+                  setPond(event.target.value);
+                }}
+                className="w-full pl-9 sm:w-56"
+              >
+                <option value="">All ponds</option>
+
+                {ponds.map((p) => (
+                  <option key={p._id} value={p._id}>
+                    {p.name}
+                    {p.pondNumber ? ` · #${p.pondNumber}` : ""}
+                  </option>
+                ))}
+              </Select>
+            </div>
 
             <Button
               type="button"
               variant="outline"
-              onClick={() => load({ silent: true })}
+              onClick={handleRefresh}
               disabled={loading || refreshing}
-              className="shrink-0"
+              className="gap-2"
             >
               {refreshing ? (
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                <Loader2 className="h-4 w-4 animate-spin" />
               ) : (
-                <RefreshCw className="mr-2 h-4 w-4" />
+                <RefreshCw className="h-4 w-4" />
               )}
               Refresh
             </Button>
           </div>
         </div>
 
-        {/* -------------------------------------------------
+        {/* ----------------------------------------------------
             TABLE
-        ------------------------------------------------- */}
+            ---------------------------------------------------- */}
 
-        <div className="overflow-x-auto">
-          {loading ? (
-            <div className="flex min-h-64 items-center justify-center">
-              <div className="flex items-center gap-2 text-sm text-[var(--muted)]">
-                <Loader2 className="h-4 w-4 animate-spin" />
-                Loading feeding records...
-              </div>
-            </div>
-          ) : rows.length ? (
+        {loading ? (
+          <div className="flex min-h-72 flex-col items-center justify-center gap-3 px-5 text-center">
+            <Loader2 className="h-7 w-7 animate-spin text-[var(--primary)]" />
+
+            <p className="text-sm text-[var(--muted)]">
+              Loading feeding records...
+            </p>
+          </div>
+        ) : rows.length > 0 ? (
+          <div className="overflow-x-auto">
             <Table>
               <THead>
                 <TR>
@@ -676,176 +693,195 @@ export default function Feeding() {
               </THead>
 
               <TBody>
-                {rows.map((record) => (
-                  <TR key={record._id}>
-                    {/* DATE */}
+                {rows.map((record) => {
+                  const isDeleting = deletingId === record._id;
 
-                    <TD>
-                      <div className="font-medium">
-                        {formatDate(record.date)}
-                      </div>
-
-                      <div className="text-xs text-slate-400">
-                        {record.feedingTime || "—"}
-                      </div>
-                    </TD>
-
-                    {/* POND */}
-
-                    <TD>
-                      <div className="font-semibold">
-                        {pondName(record.pond)}
-                      </div>
-
-                      {record?.pond?.pondNumber && (
-                        <div className="text-xs text-[var(--muted)]">
-                          Pond #{record.pond.pondNumber}
+                  return (
+                    <TR key={record._id}>
+                      {/* DATE */}
+                      <TD>
+                        <div className="font-medium">
+                          {formatDate(record.date)}
                         </div>
-                      )}
-                    </TD>
 
-                    {/* FEED */}
+                        <div className="mt-1 text-xs text-slate-400">
+                          {record.feedingTime || "—"}
+                        </div>
+                      </TD>
 
-                    <TD>
-                      <div className="font-semibold">
-                        {record.feedBrand || "—"}
-                      </div>
+                      {/* POND */}
+                      <TD>
+                        <div className="font-semibold">
+                          {pondName(record.pond)}
+                        </div>
 
-                      <div className="text-xs capitalize text-[var(--muted)]">
-                        {record.feedType || "—"}
+                        {record.pond?.pondNumber && (
+                          <div className="mt-1 text-xs text-[var(--muted)]">
+                            Pond #{record.pond.pondNumber}
+                          </div>
+                        )}
+                      </TD>
 
-                        {" · "}
+                      {/* FEED */}
+                      <TD>
+                        <div className="font-semibold">
+                          {record.feedBrand || "—"}
+                        </div>
 
-                        {record.feedSize ?? "—"}
+                        <div className="mt-1 text-xs capitalize text-[var(--muted)]">
+                          {record.feedType || "—"}
 
-                        {record.feedSizeUnit || ""}
-                      </div>
-                    </TD>
+                          {record.feedSize !== undefined &&
+                            record.feedSize !== null && (
+                              <>
+                                {" · "}
+                                {record.feedSize}
+                                {record.feedSizeUnit || "mm"}
+                              </>
+                            )}
+                        </div>
+                      </TD>
 
-                    {/* QUANTITY */}
+                      {/* QUANTITY */}
+                      <TD>
+                        <div className="font-semibold">
+                          {formatNumber(record.quantityUsed, 2)}{" "}
+                          {record.quantityUnit || "kg"}
+                        </div>
 
-                    <TD>
-                      <span className="font-semibold">
-                        {formatNumber(record.quantityUsed, 2)}
-                      </span>{" "}
-                      {record.quantityUnit || "kg"}
-                    </TD>
-
-                    {/* COST */}
-
-                    <TD>{formatCurrency(record.cost || 0)}</TD>
-
-                    {/* INVENTORY */}
-
-                    <TD>
-                      {record.inventoryUpdated ? (
-                        <span className="inline-flex items-center rounded-full bg-emerald-50 px-2.5 py-1 text-xs font-semibold text-emerald-700">
-                          Deducted
-                        </span>
-                      ) : (
-                        <span className="inline-flex items-center rounded-full bg-amber-50 px-2.5 py-1 text-xs font-semibold text-amber-700">
-                          No matching inventory
-                        </span>
-                      )}
-                    </TD>
-
-                    {/* ACTIONS */}
-
-                    <TD>
-                      <div className="flex justify-end gap-1">
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="icon"
-                          title="Edit feeding"
-                          onClick={() => openEditDialog(record)}
-                          disabled={deletingId === record._id}
-                        >
-                          <Edit3 className="h-4 w-4" />
-                        </Button>
-
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="icon"
-                          title="Delete feeding"
-                          onClick={() => deleteRecord(record)}
-                          disabled={deletingId === record._id}
-                          className="text-red-600 hover:text-red-700"
-                        >
-                          {deletingId === record._id ? (
-                            <Loader2 className="h-4 w-4 animate-spin" />
-                          ) : (
-                            <Trash2 className="h-4 w-4" />
+                        {record.estimatedBiomassBeforeFeeding !== null &&
+                          record.estimatedBiomassBeforeFeeding !==
+                            undefined && (
+                            <div className="mt-1 text-xs text-[var(--muted)]">
+                              Biomass:{" "}
+                              {formatNumber(
+                                record.estimatedBiomassBeforeFeeding,
+                                2,
+                              )}{" "}
+                              kg
+                            </div>
                           )}
-                        </Button>
-                      </div>
-                    </TD>
-                  </TR>
-                ))}
+                      </TD>
+
+                      {/* COST */}
+                      <TD>{formatCurrency(record.cost || 0)}</TD>
+
+                      {/* INVENTORY */}
+                      <TD>
+                        {record.inventoryUpdated ? (
+                          <span className="inline-flex items-center rounded-full bg-emerald-50 px-2.5 py-1 text-xs font-semibold text-emerald-700">
+                            Deducted
+                          </span>
+                        ) : (
+                          <span className="inline-flex items-center rounded-full bg-amber-50 px-2.5 py-1 text-xs font-semibold text-amber-700">
+                            Not linked
+                          </span>
+                        )}
+                      </TD>
+
+                      {/* ACTIONS */}
+                      <TD>
+                        <div className="flex justify-end gap-1">
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="icon"
+                            title="Edit feeding"
+                            onClick={() => openEditDialog(record)}
+                            disabled={isDeleting || Boolean(deletingId)}
+                          >
+                            <Edit3 className="h-4 w-4" />
+                          </Button>
+
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="icon"
+                            title="Delete feeding"
+                            onClick={() => handleDelete(record)}
+                            disabled={isDeleting || Boolean(deletingId)}
+                          >
+                            {isDeleting ? (
+                              <Loader2 className="h-4 w-4 animate-spin" />
+                            ) : (
+                              <Trash2 className="h-4 w-4 text-red-500" />
+                            )}
+                          </Button>
+                        </div>
+                      </TD>
+                    </TR>
+                  );
+                })}
               </TBody>
             </Table>
-          ) : (
-            <div className="flex min-h-64 flex-col items-center justify-center px-5 text-center">
-              <div className="mb-3 flex h-12 w-12 items-center justify-center rounded-full bg-slate-100">
-                <Utensils className="h-5 w-5 text-slate-500" />
-              </div>
+          </div>
+        ) : (
+          /* --------------------------------------------------
+             EMPTY STATE
+             -------------------------------------------------- */
 
-              <h3 className="font-semibold">No feeding records</h3>
+          <div className="flex min-h-72 flex-col items-center justify-center px-5 text-center">
+            <div className="mb-4 flex h-12 w-12 items-center justify-center rounded-2xl bg-[var(--surface-muted)]">
+              <Utensils className="h-5 w-5 text-[var(--muted)]" />
+            </div>
 
-              <p className="mt-1 max-w-sm text-sm text-[var(--muted)]">
-                No feeding records match the current filter.
-              </p>
+            <h3 className="text-sm font-semibold">No feeding records found</h3>
 
-              <Button type="button" className="mt-4" onClick={openCreateDialog}>
-                <Plus className="mr-2 h-4 w-4" />
+            <p className="mt-1 max-w-sm text-sm text-[var(--muted)]">
+              {pond
+                ? "There are no feeding records for the selected pond."
+                : "Start by recording your first feeding activity."}
+            </p>
+
+            {!pond && (
+              <Button
+                type="button"
+                className="mt-4 gap-2"
+                onClick={openRecordDialog}
+              >
+                <Plus className="h-4 w-4" />
                 Record feeding
               </Button>
-            </div>
-          )}
-        </div>
+            )}
+          </div>
+        )}
 
-        {/* -------------------------------------------------
+        {/* ----------------------------------------------------
             PAGINATION
-        ------------------------------------------------- */}
+            ---------------------------------------------------- */}
 
-        {pagination?.pages > 0 && (
-          <div className="border-t p-5">
+        {!loading && pagination.pages > 0 && (
+          <div className="border-t p-4">
             <Pagination
-              page={pagination?.page || 1}
-              pages={pagination?.pages || 0}
-              onChange={setPage}
+              page={pagination.page || page}
+              pages={pagination.pages || 0}
+              onChange={(nextPage) => {
+                setPage(nextPage);
+              }}
             />
           </div>
         )}
       </Card>
 
-      {/* ===================================================
+      {/* ======================================================
           CREATE / EDIT DIALOG
-      =================================================== */}
+          ====================================================== */}
 
       <Dialog
         open={open}
-        onOpenChange={(value) => {
-          if (!value) {
-            closeDialog();
-          } else {
-            setOpen(true);
-          }
-        }}
+        onOpenChange={handleDialogChange}
         title={editing ? "Edit feeding record" : "Record feeding"}
         description={
           editing
-            ? "Update the feeding record. Inventory will be restored and recalculated against the new feeding details."
-            : "If a matching active feed inventory item exists, the backend will automatically deduct the quantity from inventory."
+            ? "Update the feeding information. Inventory will automatically be recalculated by the backend."
+            : "Record a feeding event. If a matching active feed inventory item exists, the backend will automatically deduct the quantity."
         }
       >
         <form
           onSubmit={handleSubmit(submit)}
-          className="grid max-h-[75vh] gap-5 overflow-y-auto pr-1 sm:grid-cols-2"
+          className="grid gap-5 sm:grid-cols-2"
         >
           {/* DATE */}
-
           <div>
             <Label required>Date</Label>
 
@@ -855,25 +891,18 @@ export default function Feeding() {
                 required: "Feeding date is required.",
               })}
             />
-
-            {errors.date && (
-              <p className="mt-1 text-xs text-red-600">{errors.date.message}</p>
-            )}
           </div>
 
           {/* POND */}
-
           <div>
             <Label required>Pond</Label>
 
             <Select
               {...register("pond", {
-                required: "Please select a pond.",
+                required: "A pond is required.",
               })}
             >
-              <option value="">
-                {pondsLoading ? "Loading ponds..." : "Select pond"}
-              </option>
+              <option value="">Select pond</option>
 
               {ponds.map((p) => (
                 <option key={p._id} value={p._id}>
@@ -882,14 +911,9 @@ export default function Feeding() {
                 </option>
               ))}
             </Select>
-
-            {errors.pond && (
-              <p className="mt-1 text-xs text-red-600">{errors.pond.message}</p>
-            )}
           </div>
 
           {/* FEED BRAND */}
-
           <div>
             <Label required>Feed brand / inventory name</Label>
 
@@ -903,29 +927,13 @@ export default function Feeding() {
                 },
               })}
             />
-
-            {errors.feedBrand && (
-              <p className="mt-1 text-xs text-red-600">
-                {errors.feedBrand.message}
-              </p>
-            )}
-
-            <p className="mt-1 text-xs text-[var(--muted)]">
-              Use the exact inventory item name if you want automatic stock
-              deduction.
-            </p>
           </div>
 
           {/* FEED TYPE */}
-
           <div>
             <Label>Feed type</Label>
 
-            <Select
-              {...register("feedType", {
-                required: "Feed type is required.",
-              })}
-            >
+            <Select {...register("feedType")}>
               {FEED_TYPES.map((type) => (
                 <option key={type} value={type}>
                   {type}
@@ -935,7 +943,6 @@ export default function Feeding() {
           </div>
 
           {/* FEED SIZE */}
-
           <div>
             <Label>Feed size</Label>
 
@@ -944,32 +951,20 @@ export default function Feeding() {
                 type="number"
                 step="0.01"
                 min="0"
-                {...register("feedSize", {
-                  required: "Feed size is required.",
-                  min: {
-                    value: 0,
-                    message: "Feed size cannot be negative.",
-                  },
-                  valueAsNumber: true,
-                })}
+                {...register("feedSize")}
               />
 
-              <Input
-                {...register("feedSizeUnit")}
-                className="w-24"
-                placeholder="mm"
-              />
+              <Select {...register("feedSizeUnit")} className="w-28">
+                <option value="mm">mm</option>
+
+                <option value="kg">kg</option>
+
+                <option value="other">other</option>
+              </Select>
             </div>
-
-            {errors.feedSize && (
-              <p className="mt-1 text-xs text-red-600">
-                {errors.feedSize.message}
-              </p>
-            )}
           </div>
 
           {/* QUANTITY */}
-
           <div>
             <Label required>Quantity used</Label>
 
@@ -984,7 +979,6 @@ export default function Feeding() {
                     value: 0.001,
                     message: "Quantity must be greater than zero.",
                   },
-                  valueAsNumber: true,
                 })}
               />
 
@@ -996,21 +990,9 @@ export default function Feeding() {
                 ))}
               </Select>
             </div>
-
-            {errors.quantityUsed && (
-              <p className="mt-1 text-xs text-red-600">
-                {errors.quantityUsed.message}
-              </p>
-            )}
-
-            <p className="mt-1 text-xs text-[var(--muted)]">
-              The unit must match the inventory item's unit when automatic
-              deduction is used.
-            </p>
           </div>
 
-          {/* FEEDING TIME */}
-
+          {/* TIME */}
           <div>
             <Label required>Feeding time</Label>
 
@@ -1024,39 +1006,16 @@ export default function Feeding() {
                 },
               })}
             />
-
-            {errors.feedingTime && (
-              <p className="mt-1 text-xs text-red-600">
-                {errors.feedingTime.message}
-              </p>
-            )}
           </div>
 
           {/* COST */}
-
           <div>
             <Label>Cost</Label>
 
-            <Input
-              type="number"
-              step="0.01"
-              min="0"
-              {...register("cost", {
-                min: {
-                  value: 0,
-                  message: "Cost cannot be negative.",
-                },
-                valueAsNumber: true,
-              })}
-            />
-
-            {errors.cost && (
-              <p className="mt-1 text-xs text-red-600">{errors.cost.message}</p>
-            )}
+            <Input type="number" step="0.01" min="0" {...register("cost")} />
           </div>
 
           {/* BIOMASS */}
-
           <div>
             <Label>Estimated biomass before feeding (kg)</Label>
 
@@ -1064,25 +1023,11 @@ export default function Feeding() {
               type="number"
               step="0.001"
               min="0"
-              placeholder="Optional"
-              {...register("estimatedBiomassBeforeFeeding", {
-                min: {
-                  value: 0,
-                  message: "Biomass cannot be negative.",
-                },
-                valueAsNumber: false,
-              })}
+              {...register("estimatedBiomassBeforeFeeding")}
             />
-
-            {errors.estimatedBiomassBeforeFeeding && (
-              <p className="mt-1 text-xs text-red-600">
-                {errors.estimatedBiomassBeforeFeeding.message}
-              </p>
-            )}
           </div>
 
           {/* NOTES */}
-
           <div className="sm:col-span-2">
             <Label>Notes</Label>
 
@@ -1094,45 +1039,38 @@ export default function Feeding() {
                 },
               })}
               placeholder="Add any useful notes about this feeding..."
-              className="min-h-24 w-full resize-y rounded-xl border bg-transparent p-3 text-sm outline-none transition focus:ring-2 focus:ring-[var(--ring)]"
+              className="min-h-28 w-full resize-y rounded-xl border bg-transparent p-3 text-sm outline-none transition focus:ring-2 focus:ring-[var(--primary)]"
             />
-
-            {errors.notes && (
-              <p className="mt-1 text-xs text-red-600">
-                {errors.notes.message}
-              </p>
-            )}
           </div>
 
-          {/* FORM FOOTER */}
-
+          {/* ACTIONS */}
           <div className="flex justify-end gap-2 border-t pt-4 sm:col-span-2">
             <Button
               type="button"
               variant="outline"
-              onClick={closeDialog}
-              disabled={isSubmitting}
+              onClick={() => handleDialogChange(false)}
+              disabled={isSubmitting || isSubmittingRef.current}
             >
-              <X className="mr-2 h-4 w-4" />
               Cancel
             </Button>
 
             <Button
               type="submit"
               disabled={isSubmitting || isSubmittingRef.current}
+              className="min-w-32 gap-2"
             >
-              {isSubmitting ? (
+              {isSubmitting || isSubmittingRef.current ? (
                 <>
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  <Loader2 className="h-4 w-4 animate-spin" />
 
                   {editing ? "Updating..." : "Recording..."}
                 </>
               ) : (
                 <>
                   {editing ? (
-                    <Edit3 className="mr-2 h-4 w-4" />
+                    <Edit3 className="h-4 w-4" />
                   ) : (
-                    <Plus className="mr-2 h-4 w-4" />
+                    <Plus className="h-4 w-4" />
                   )}
 
                   {editing ? "Update feeding" : "Record feeding"}
