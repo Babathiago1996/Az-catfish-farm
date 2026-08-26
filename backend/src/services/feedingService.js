@@ -37,12 +37,26 @@ const escapeRegex = (value) =>
  * - quantity
  * - unit
  * - unitCost
+ *
+ * This previously also required category === "feed", which
+ * meant a correctly-named inventory item filed under any
+ * other category (or a category chosen slightly differently
+ * than expected) would silently fail to link, showing
+ * "Not linked" even though the names matched exactly.
+ *
+ * Matching on name alone is safe: inventory item names are
+ * already enforced to be unique among active items
+ * (see inventoryService.createItem), so there can never be
+ * two different active items sharing a name across
+ * categories to create ambiguity here.
  */
 const findFeedInventory = async ({ brand, session }) => {
-  const regexBrand = new RegExp(`^${escapeRegex(brand)}$`, "i");
+  const regexBrand = new RegExp(
+    `^${escapeRegex(String(brand || "").trim())}$`,
+    "i",
+  );
 
   return Inventory.findOne({
-    category: "feed",
     name: regexBrand,
     isActive: true,
   }).session(session);

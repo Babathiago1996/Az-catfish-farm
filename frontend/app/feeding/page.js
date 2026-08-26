@@ -39,10 +39,6 @@ import {
 
 import { toast } from "sonner";
 
-/* ============================================================
-   CONSTANTS
-   ============================================================ */
-
 const PAGE_SIZE = 30;
 
 const DEFAULT_FORM_VALUES = {
@@ -60,13 +56,6 @@ const DEFAULT_FORM_VALUES = {
   notes: "",
 };
 
-/* ============================================================
-   HELPERS
-   ============================================================ */
-
-/**
- * Convert an API error into something useful for the user.
- */
 const getErrorMessage = (error, fallback) => {
   if (!error) {
     return fallback;
@@ -83,17 +72,6 @@ const getErrorMessage = (error, fallback) => {
   return fallback;
 };
 
-/**
- * Normalize the feeding list response.
- *
- * Backend returns:
- *
- * {
- *   records: [],
- *   summary: {},
- *   pagination: {}
- * }
- */
 const normalizeFeedingList = (response) => {
   return {
     records: Array.isArray(response?.records) ? response.records : [],
@@ -112,10 +90,6 @@ const normalizeFeedingList = (response) => {
   };
 };
 
-/**
- * Normalize pond response because the pond endpoint may
- * return { ponds: [] } depending on the controller.
- */
 const normalizePonds = (response) => {
   if (Array.isArray(response)) {
     return response;
@@ -132,24 +106,13 @@ const normalizePonds = (response) => {
   return [];
 };
 
-/**
- * Safely convert a value to number.
- */
 const numberValue = (value, fallback = 0) => {
   const parsed = Number(value);
 
   return Number.isFinite(parsed) ? parsed : fallback;
 };
 
-/* ============================================================
-   COMPONENT
-   ============================================================ */
-
 export default function Feeding() {
-  /* ----------------------------------------------------------
-     DATA
-     ---------------------------------------------------------- */
-
   const [rows, setRows] = useState([]);
 
   const [ponds, setPonds] = useState([]);
@@ -158,10 +121,6 @@ export default function Feeding() {
     quantity: 0,
     cost: 0,
   });
-
-  /* ----------------------------------------------------------
-     PAGINATION
-     ---------------------------------------------------------- */
 
   const [pagination, setPagination] = useState({
     page: 1,
@@ -172,15 +131,7 @@ export default function Feeding() {
 
   const [page, setPage] = useState(1);
 
-  /* ----------------------------------------------------------
-     FILTERS
-     ---------------------------------------------------------- */
-
   const [pond, setPond] = useState("");
-
-  /* ----------------------------------------------------------
-     UI STATE
-     ---------------------------------------------------------- */
 
   const [open, setOpen] = useState(false);
 
@@ -192,15 +143,7 @@ export default function Feeding() {
 
   const [refreshing, setRefreshing] = useState(false);
 
-  /* ----------------------------------------------------------
-     DOUBLE-SUBMISSION GUARD
-     ---------------------------------------------------------- */
-
   const isSubmittingRef = useRef(false);
-
-  /* ----------------------------------------------------------
-     FORM
-     ---------------------------------------------------------- */
 
   const {
     register,
@@ -210,10 +153,6 @@ export default function Feeding() {
   } = useForm({
     defaultValues: DEFAULT_FORM_VALUES,
   });
-
-  /* ==========================================================
-     LOAD FEEDING RECORDS + TODAY SUMMARY
-     ========================================================== */
 
   const load = useCallback(
     async ({ silent = false } = {}) => {
@@ -234,10 +173,6 @@ export default function Feeding() {
           api.feeding.today(),
         ]);
 
-        /* ----------------------------------------------------
-           LIST
-           ---------------------------------------------------- */
-
         const list = normalizeFeedingList(listResponse);
 
         setRows(list.records);
@@ -248,10 +183,6 @@ export default function Feeding() {
           total: numberValue(list.pagination?.total, 0),
           pages: numberValue(list.pagination?.pages, 0),
         });
-
-        /* ----------------------------------------------------
-           TODAY
-           ---------------------------------------------------- */
 
         setToday({
           quantity: numberValue(todayResponse?.summary?.quantity, 0),
@@ -268,10 +199,6 @@ export default function Feeding() {
     [page, pond],
   );
 
-  /* ==========================================================
-     LOAD PONDS
-     ========================================================== */
-
   const loadPonds = useCallback(async () => {
     try {
       const response = await api.ponds.list({
@@ -286,25 +213,13 @@ export default function Feeding() {
     }
   }, []);
 
-  /* ==========================================================
-     INITIAL DATA
-     ========================================================== */
-
   useEffect(() => {
     loadPonds();
   }, [loadPonds]);
 
-  /* ==========================================================
-     LOAD FEEDING DATA WHEN FILTER/PAGE CHANGES
-     ========================================================== */
-
   useEffect(() => {
     load();
   }, [load]);
-
-  /* ==========================================================
-     RESET FORM
-     ========================================================== */
 
   const resetFeedingForm = useCallback(() => {
     reset({
@@ -313,10 +228,6 @@ export default function Feeding() {
     });
   }, [reset]);
 
-  /* ==========================================================
-     OPEN CREATE DIALOG
-     ========================================================== */
-
   const openRecordDialog = () => {
     setEditing(null);
 
@@ -324,10 +235,6 @@ export default function Feeding() {
 
     setOpen(true);
   };
-
-  /* ==========================================================
-     OPEN EDIT DIALOG
-     ========================================================== */
 
   const openEditDialog = (record) => {
     if (!record?._id) {
@@ -380,10 +287,6 @@ export default function Feeding() {
     setOpen(true);
   };
 
-  /* ==========================================================
-     SUBMIT CREATE / UPDATE
-     ========================================================== */
-
   const submit = async (data) => {
     if (isSubmittingRef.current) {
       return;
@@ -392,10 +295,6 @@ export default function Feeding() {
     isSubmittingRef.current = true;
 
     try {
-      /* ------------------------------------------------------
-         BUILD PAYLOAD
-         ------------------------------------------------------ */
-
       const payload = {
         date: data.date,
 
@@ -427,37 +326,21 @@ export default function Feeding() {
         notes: String(data.notes || "").trim(),
       };
 
-      /* ------------------------------------------------------
-         CREATE
-         ------------------------------------------------------ */
-
       if (!editing) {
         await api.feeding.create(payload);
 
         toast.success("Feeding recorded successfully.");
       } else {
-
-      /* ------------------------------------------------------
-         UPDATE
-         ------------------------------------------------------ */
         await api.feeding.update(editing._id, payload);
 
         toast.success("Feeding record updated successfully.");
       }
-
-      /* ------------------------------------------------------
-         CLOSE + RESET
-         ------------------------------------------------------ */
 
       setOpen(false);
 
       setEditing(null);
 
       resetFeedingForm();
-
-      /* ------------------------------------------------------
-         RELOAD TABLE + TODAY METRICS
-         ------------------------------------------------------ */
 
       await load();
     } catch (error) {
@@ -473,10 +356,6 @@ export default function Feeding() {
       isSubmittingRef.current = false;
     }
   };
-
-  /* ==========================================================
-     DELETE FEEDING
-     ========================================================== */
 
   const handleDelete = async (record) => {
     if (!record?._id) {
@@ -507,10 +386,6 @@ export default function Feeding() {
 
       toast.success("Feeding record deleted and inventory restored.");
 
-      /*
-       * If deleting the final record on a page,
-       * move back one page where appropriate.
-       */
       if (rows.length === 1 && page > 1) {
         setPage((currentPage) => Math.max(currentPage - 1, 1));
       } else {
@@ -523,25 +398,13 @@ export default function Feeding() {
     }
   };
 
-  /* ==========================================================
-     REFRESH
-     ========================================================== */
-
   const handleRefresh = async () => {
     await load({
       silent: true,
     });
   };
 
-  /* ==========================================================
-     CLOSE DIALOG
-     ========================================================== */
-
   const handleDialogChange = (value) => {
-    /*
-     * Do not allow the dialog to close while
-     * the form is actively submitting.
-     */
     if (isSubmittingRef.current) {
       return;
     }
@@ -555,19 +418,11 @@ export default function Feeding() {
     }
   };
 
-  /* ==========================================================
-     RENDER
-     ========================================================== */
-
   return (
     <AdminLayout
       title="Feeding"
       description="Track feed usage and connect every feeding event to inventory."
     >
-      {/* ======================================================
-          HEADER
-          ====================================================== */}
-
       <PageHeader
         eyebrow="Production"
         title="Feeding"
@@ -578,10 +433,6 @@ export default function Feeding() {
           onClick: openRecordDialog,
         }}
       />
-
-      {/* ======================================================
-          TODAY METRICS
-          ====================================================== */}
 
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
         <MetricCard
@@ -606,15 +457,7 @@ export default function Feeding() {
         />
       </div>
 
-      {/* ======================================================
-          RECORDS CARD
-          ====================================================== */}
-
       <Card className="mt-5 overflow-hidden">
-        {/* ----------------------------------------------------
-            FILTER BAR
-            ---------------------------------------------------- */}
-
         <div className="flex flex-col gap-3 border-b p-5 md:flex-row md:items-center md:justify-between">
           <div>
             <h2 className="text-base font-semibold">Feeding records</h2>
@@ -665,10 +508,6 @@ export default function Feeding() {
           </div>
         </div>
 
-        {/* ----------------------------------------------------
-            TABLE
-            ---------------------------------------------------- */}
-
         {loading ? (
           <div className="flex min-h-72 flex-col items-center justify-center gap-3 px-5 text-center">
             <Loader2 className="h-7 w-7 animate-spin text-[var(--primary)]" />
@@ -698,7 +537,6 @@ export default function Feeding() {
 
                   return (
                     <TR key={record._id}>
-                      {/* DATE */}
                       <TD>
                         <div className="font-medium">
                           {formatDate(record.date)}
@@ -709,7 +547,6 @@ export default function Feeding() {
                         </div>
                       </TD>
 
-                      {/* POND */}
                       <TD>
                         <div className="font-semibold">
                           {pondName(record.pond)}
@@ -722,7 +559,6 @@ export default function Feeding() {
                         )}
                       </TD>
 
-                      {/* FEED */}
                       <TD>
                         <div className="font-semibold">
                           {record.feedBrand || "—"}
@@ -742,7 +578,6 @@ export default function Feeding() {
                         </div>
                       </TD>
 
-                      {/* QUANTITY */}
                       <TD>
                         <div className="font-semibold">
                           {formatNumber(record.quantityUsed, 2)}{" "}
@@ -763,10 +598,8 @@ export default function Feeding() {
                           )}
                       </TD>
 
-                      {/* COST */}
                       <TD>{formatCurrency(record.cost || 0)}</TD>
 
-                      {/* INVENTORY */}
                       <TD>
                         {record.inventoryUpdated ? (
                           <span className="inline-flex items-center rounded-full bg-emerald-50 px-2.5 py-1 text-xs font-semibold text-emerald-700">
@@ -779,7 +612,6 @@ export default function Feeding() {
                         )}
                       </TD>
 
-                      {/* ACTIONS */}
                       <TD>
                         <div className="flex justify-end gap-1">
                           <Button
@@ -816,10 +648,6 @@ export default function Feeding() {
             </Table>
           </div>
         ) : (
-          /* --------------------------------------------------
-             EMPTY STATE
-             -------------------------------------------------- */
-
           <div className="flex min-h-72 flex-col items-center justify-center px-5 text-center">
             <div className="mb-4 flex h-12 w-12 items-center justify-center rounded-2xl bg-[var(--surface-muted)]">
               <Utensils className="h-5 w-5 text-[var(--muted)]" />
@@ -846,10 +674,6 @@ export default function Feeding() {
           </div>
         )}
 
-        {/* ----------------------------------------------------
-            PAGINATION
-            ---------------------------------------------------- */}
-
         {!loading && pagination.pages > 0 && (
           <div className="border-t p-4">
             <Pagination
@@ -862,10 +686,6 @@ export default function Feeding() {
           </div>
         )}
       </Card>
-
-      {/* ======================================================
-          CREATE / EDIT DIALOG
-          ====================================================== */}
 
       <Dialog
         open={open}
@@ -881,7 +701,6 @@ export default function Feeding() {
           onSubmit={handleSubmit(submit)}
           className="grid gap-5 sm:grid-cols-2"
         >
-          {/* DATE */}
           <div>
             <Label required>Date</Label>
 
@@ -893,7 +712,6 @@ export default function Feeding() {
             />
           </div>
 
-          {/* POND */}
           <div>
             <Label required>Pond</Label>
 
@@ -913,7 +731,6 @@ export default function Feeding() {
             </Select>
           </div>
 
-          {/* FEED BRAND */}
           <div>
             <Label required>Feed brand / inventory name</Label>
 
@@ -929,7 +746,6 @@ export default function Feeding() {
             />
           </div>
 
-          {/* FEED TYPE */}
           <div>
             <Label>Feed type</Label>
 
@@ -942,7 +758,6 @@ export default function Feeding() {
             </Select>
           </div>
 
-          {/* FEED SIZE */}
           <div>
             <Label>Feed size</Label>
 
@@ -964,15 +779,14 @@ export default function Feeding() {
             </div>
           </div>
 
-          {/* QUANTITY */}
           <div>
             <Label required>Quantity used</Label>
 
             <div className="flex gap-2">
               <Input
                 type="number"
-                step="0.01"
-                min="0.001"
+                step="any"
+                min="0"
                 {...register("quantityUsed", {
                   required: "Quantity used is required.",
                   min: {
@@ -992,7 +806,6 @@ export default function Feeding() {
             </div>
           </div>
 
-          {/* TIME */}
           <div>
             <Label required>Feeding time</Label>
 
@@ -1008,14 +821,12 @@ export default function Feeding() {
             />
           </div>
 
-          {/* COST */}
           <div>
             <Label>Cost</Label>
 
             <Input type="number" step="0.01" min="0" {...register("cost")} />
           </div>
 
-          {/* BIOMASS */}
           <div>
             <Label>Estimated biomass before feeding (kg)</Label>
 
@@ -1027,7 +838,6 @@ export default function Feeding() {
             />
           </div>
 
-          {/* NOTES */}
           <div className="sm:col-span-2">
             <Label>Notes</Label>
 
@@ -1043,7 +853,6 @@ export default function Feeding() {
             />
           </div>
 
-          {/* ACTIONS */}
           <div className="flex justify-end gap-2 border-t pt-4 sm:col-span-2">
             <Button
               type="button"
