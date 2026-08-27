@@ -213,6 +213,8 @@ const createFeeding = async ({ data, ipAddress, userAgent }) => {
                 data.estimatedBiomassBeforeFeeding ?? null,
 
               notes: data.notes || "",
+
+              inventoryUpdated: true,
             },
           ],
           {
@@ -300,6 +302,8 @@ const createFeeding = async ({ data, ipAddress, userAgent }) => {
               data.estimatedBiomassBeforeFeeding ?? null,
 
             notes: data.notes || "",
+
+            inventoryUpdated: false,
           },
         ],
         {
@@ -559,6 +563,7 @@ const updateFeeding = async ({ id, data, ipAddress, userAgent }) => {
       feeding.estimatedBiomassBeforeFeeding =
         data.estimatedBiomassBeforeFeeding ?? null;
       feeding.notes = data.notes || "";
+      feeding.inventoryUpdated = inventoryUpdated;
 
       await feeding.save({ session });
 

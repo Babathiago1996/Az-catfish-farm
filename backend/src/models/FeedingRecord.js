@@ -92,6 +92,23 @@ const feedingRecordSchema = new mongoose.Schema(
       trim: true,
       maxlength: 2000,
     },
+
+    /*
+     * Whether this feeding event successfully found a
+     * matching inventory item and deducted stock from it.
+     *
+     * This used to only exist as a transient value returned
+     * by the create/update API response, never actually
+     * saved on the document — so every time the record was
+     * re-fetched (e.g. on page load or after a refresh), it
+     * would read back as undefined and always display as
+     * "Not linked" in the table, even when the deduction had
+     * genuinely happened at creation time.
+     */
+    inventoryUpdated: {
+      type: Boolean,
+      default: false,
+    },
   },
   {
     timestamps: true,
