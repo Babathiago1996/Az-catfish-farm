@@ -131,7 +131,7 @@ export default function HomePage() {
               </Link>
 
               <Link
-                href="/overview"
+                href="/gallery"
                 className="inline-flex h-12 items-center justify-center gap-2 rounded-xl border border-white/15 bg-white/5 px-5 font-bold text-white backdrop-blur hover:bg-white/10"
               >
                 Explore the farm
