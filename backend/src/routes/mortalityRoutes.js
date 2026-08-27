@@ -75,4 +75,15 @@ router.patch(
   controller.updateMortality,
 );
 
+/*
+ * DELETE
+ *
+ * DELETE /api/mortality/:id
+ *
+ * Permanently removes the record from MongoDB (not a
+ * soft delete), and cleans up any Cloudinary images and
+ * pond fish-count adjustments it made.
+ */
+router.delete("/:id", mortalityIdValidators, controller.deleteMortality);
+
 module.exports = router;

@@ -721,6 +721,106 @@ const updateMortality = async ({
 
 /*
  * ============================================================
+ * DELETE
+ * ============================================================
+ *
+ * This is a genuine hard delete — the record is fully
+ * removed from MongoDB, not soft-deleted or flagged inactive.
+ *
+ * Uses the same recalculatePondFishCount() helper that
+ * create/update already rely on, so removing a mortality
+ * record correctly gives those fish back to the pond's
+ * currentFishCount (recomputed from scratch as
+ * totalStocked - totalMortality, exactly as it already
+ * works elsewhere in this file) without needing separate
+ * manual delta math.
+ */
+
+const deleteMortality = async ({ id, ipAddress, userAgent }) => {
+  if (!mongoose.isValidObjectId(id)) {
+    return {
+      success: false,
+      reason: "NOT_FOUND",
+    };
+  }
+
+  const record = await Mortality.findById(id);
+
+  if (!record) {
+    return {
+      success: false,
+      reason: "NOT_FOUND",
+    };
+  }
+
+  const pondId = record.pond;
+
+  /*
+   * Collect every Cloudinary publicId on this record —
+   * the new `images` array, plus the legacy single `image`
+   * field for records created before multi-image support —
+   * so nothing gets left behind as an orphaned asset.
+   */
+  const publicIds = [
+    ...(Array.isArray(record.images)
+      ? record.images.map((image) => image?.publicId).filter(Boolean)
+      : []),
+    record.image?.publicId,
+  ].filter(Boolean);
+
+  const deletedInfo = {
+    _id: record._id,
+    pond: record.pond,
+    date: record.date,
+    quantity: record.quantity,
+    estimatedCause: record.estimatedCause,
+  };
+
+  await Mortality.deleteOne({ _id: record._id });
+
+  const updatedPond = await recalculatePondFishCount(pondId);
+
+  if (publicIds.length) {
+    await Promise.all(
+      publicIds.map((publicId) =>
+        deleteCloudinaryImage(publicId).catch((cleanupError) => {
+          console.error(
+            "Unable to delete mortality image on record deletion:",
+            cleanupError,
+          );
+        }),
+      ),
+    );
+  }
+
+  await ActivityLog.create({
+    action: "delete",
+    entityType: "Mortality",
+    entityId: deletedInfo._id,
+
+    description: `Mortality record of ${deletedInfo.quantity} fish was permanently deleted.`,
+
+    metadata: {
+      pondId: deletedInfo.pond,
+      quantity: deletedInfo.quantity,
+      estimatedCause: deletedInfo.estimatedCause,
+      date: deletedInfo.date,
+      remainingFish: updatedPond?.currentFishCount || 0,
+    },
+
+    ipAddress: ipAddress || "",
+    userAgent: userAgent || "",
+  });
+
+  return {
+    success: true,
+    record: deletedInfo,
+    pond: updatedPond,
+  };
+};
+
+/*
+ * ============================================================
  * SUMMARY
  * ============================================================
  */
@@ -874,6 +974,7 @@ module.exports = {
   listMortality,
   getMortalityById,
   updateMortality,
+  deleteMortality,
   getMortalitySummary,
 
   recalculatePondFishCount,

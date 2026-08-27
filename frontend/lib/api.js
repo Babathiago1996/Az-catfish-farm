@@ -166,6 +166,10 @@ export const api = {
     update: async (id, data) => {
       return patch(`/mortality/${id}`, data);
     },
+
+    remove: async (id) => {
+      return del(`/mortality/${id}`);
+    },
   },
 
   sales: {

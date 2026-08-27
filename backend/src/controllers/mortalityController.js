@@ -233,6 +233,36 @@ const updateMortality = asyncHandler(async (req, res) => {
   });
 });
 
+const deleteMortality = asyncHandler(async (req, res) => {
+  if (!validate(req, res)) {
+    return;
+  }
+
+  const result = await mortalityService.deleteMortality({
+    id: req.params.id,
+
+    ...getMetadata(req),
+  });
+
+  if (!result.success) {
+    return errorResponse(res, {
+      statusCode: 404,
+
+      message: "Mortality record not found.",
+    });
+  }
+
+  return successResponse(res, {
+    statusCode: 200,
+
+    message: "Mortality record permanently deleted.",
+
+    data: {
+      record: result.record,
+    },
+  });
+});
+
 /**
  * SUMMARY
  */
@@ -263,5 +293,6 @@ module.exports = {
   listMortality,
   getMortality,
   updateMortality,
+  deleteMortality,
   getMortalitySummary,
 };
