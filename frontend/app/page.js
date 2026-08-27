@@ -18,6 +18,19 @@ import { PublicShell } from "@/components/layout/public-shell";
 import { api } from "@/lib/api";
 import { formatNumber } from "@/lib/utils";
 
+/*
+ * Same pattern as the contact page: a fixed fallback so the
+ * map link always works, even before/without the farm's
+ * address being configured in Settings. If `farm.address`
+ * is set, that's still what's displayed as text — this URL
+ * just always points at the real farm location.
+ */
+const FARM_ADDRESS = "3 Olalere Street, Ikotun, Lagos";
+
+const GOOGLE_MAPS_URL = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(
+  FARM_ADDRESS,
+)}`;
+
 export default function HomePage() {
   const [content, setContent] = useState(null);
 
@@ -127,17 +140,25 @@ export default function HomePage() {
 
             <div className="mt-10 flex flex-wrap gap-x-8 gap-y-3 text-sm text-slate-300">
               {farm?.phone && (
-                <span className="inline-flex items-center gap-2">
+                <a
+                  href={`tel:${farm.phone}`}
+                  className="inline-flex items-center gap-2 hover:text-cyan-300"
+                >
                   <Phone className="h-4 w-4 text-cyan-300" />
                   {farm.phone}
-                </span>
+                </a>
               )}
 
               {farm?.address && (
-                <span className="inline-flex items-center gap-2">
+                <a
+                  href={GOOGLE_MAPS_URL}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex items-center gap-2 hover:text-cyan-300"
+                >
                   <MapPin className="h-4 w-4 text-cyan-300" />
                   {farm.address}
-                </span>
+                </a>
               )}
             </div>
           </motion.div>
