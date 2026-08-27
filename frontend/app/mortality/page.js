@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import {
   Plus,
@@ -44,48 +44,135 @@ import {
   labelize,
 } from "@/lib/utils";
 
+const PAGE_LIMIT = 30;
+const MAX_IMAGES = 5;
+const MAX_IMAGE_SIZE = 5 * 1024 * 1024;
+
+const ALLOWED_IMAGE_TYPES = [
+  "image/jpeg",
+  "image/png",
+  "image/webp",
+  "image/gif",
+];
+
+const EMPTY_SUMMARY = {
+  totalMortality: 0,
+  records: 0,
+  byPond: [],
+  byCause: [],
+};
+
+const EMPTY_PAGINATION = {
+  page: 1,
+  pages: 1,
+  total: 0,
+  limit: PAGE_LIMIT,
+};
+
+const getDefaultFormValues = () => ({
+  date: toInputDate(),
+  pond: "",
+  quantity: 1,
+  estimatedCause: "unknown",
+  notes: "",
+  images: null,
+});
+
 export default function Mortality() {
+  /*
+   * ============================================================
+   * DATA
+   * ============================================================
+   */
+
   const [rows, setRows] = useState([]);
   const [ponds, setPonds] = useState([]);
-  const [summary, setSummary] = useState(null);
+  const [summary, setSummary] = useState(EMPTY_SUMMARY);
 
-  const [pagination, setPagination] = useState({
-    page: 1,
-    pages: 1,
-    total: 0,
-    limit: 30,
-  });
+  const [pagination, setPagination] = useState(EMPTY_PAGINATION);
 
   const [page, setPage] = useState(1);
   const [pond, setPond] = useState("");
 
   /*
-   * CREATE / EDIT DIALOG
+   * ============================================================
+   * FORM / DIALOG
+   * ============================================================
    */
+
   const [open, setOpen] = useState(false);
   const [editingRecord, setEditingRecord] = useState(null);
 
   /*
-   * Loading states
+   * ============================================================
+   * LOADING STATES
+   * ============================================================
    */
+
   const [loading, setLoading] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [deletingId, setDeletingId] = useState(null);
 
   /*
-   * Existing image removal during edit.
+   * ============================================================
+   * DUPLICATE SUBMISSION PROTECTION
+   * ============================================================
    *
-   * Backend expects:
+   * IMPORTANT:
    *
-   * removeImage=true
+   * Do NOT rely only on `submitting` state here.
    *
-   * when the existing images should be removed.
+   * React state updates are asynchronous. A user can click the
+   * submit button twice before the component re-renders.
+   *
+   * This ref changes synchronously and therefore acts as the
+   * actual submission lock.
+   *
+   * This prevents:
+   *
+   * - double-click
+   * - rapid repeated clicks
+   * - pressing Enter repeatedly
+   * - multiple submit events before React re-renders
+   *
+   * The lock is shared by CREATE and UPDATE.
    */
+
+  const submitLockRef = useRef(false);
+
+  /*
+   * ============================================================
+   * LOAD REQUEST PROTECTION
+   * ============================================================
+   *
+   * Prevent an older request from overwriting newer results when
+   * the user changes page/filter quickly.
+   */
+
+  const loadRequestIdRef = useRef(0);
+
+  /*
+   * ============================================================
+   * COMPONENT MOUNT PROTECTION
+   * ============================================================
+   */
+
+  const mountedRef = useRef(true);
+
+  /*
+   * ============================================================
+   * EXISTING IMAGE REMOVAL
+   * ============================================================
+   */
+
   const [removeExistingImages, setRemoveExistingImages] = useState(false);
 
   /*
-   * Image gallery
+   * ============================================================
+   * IMAGE GALLERY
+   * ============================================================
    */
+
   const [gallery, setGallery] = useState(null);
   const [galleryIndex, setGalleryIndex] = useState(0);
 
@@ -102,75 +189,22 @@ export default function Mortality() {
     watch,
     formState: { errors },
   } = useForm({
-    defaultValues: {
-      date: toInputDate(),
-      pond: "",
-      quantity: 1,
-      estimatedCause: "unknown",
-      notes: "",
-      images: null,
-    },
+    defaultValues: getDefaultFormValues(),
   });
 
   const imageFiles = watch("images");
 
   /*
    * ============================================================
-   * LOAD MORTALITY RECORDS
+   * MOUNT / UNMOUNT
    * ============================================================
    */
 
-  const load = async () => {
-    try {
-      setLoading(true);
-
-      const [recordsResponse, summaryResponse] = await Promise.all([
-        api.mortality.list({
-          page,
-          limit: 30,
-          ...(pond ? { pond } : {}),
-        }),
-
-        api.mortality.summary({
-          ...(pond ? { pond } : {}),
-        }),
-      ]);
-
-      console.log("========== MORTALITY API RESPONSE ==========");
-      console.log("recordsResponse:", recordsResponse);
-      console.log("records:", recordsResponse?.records);
-      console.log("summaryResponse:", summaryResponse);
-      console.log("============================================");
-
-      setRows(
-        Array.isArray(recordsResponse?.records) ? recordsResponse.records : [],
-      );
-
-      setPagination(
-        recordsResponse?.pagination || {
-          page,
-          pages: 1,
-          total: 0,
-          limit: 30,
-        },
-      );
-
-      setSummary(
-        summaryResponse || {
-          totalMortality: 0,
-          records: 0,
-          byPond: [],
-          byCause: [],
-        },
-      );
-    } catch (error) {
-      console.error("Mortality load error:", error);
-
-      toast.error(error?.message || "Unable to load mortality records.");
-    } finally {
-      setLoading(false);
-    }
-  };
+  useEffect(() => {
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
 
   /*
    * ============================================================
@@ -179,14 +213,40 @@ export default function Mortality() {
    */
 
   useEffect(() => {
+    let active = true;
+
     const loadPonds = async () => {
       try {
         const response = await api.ponds.list({
           limit: 100,
         });
 
-        setPonds(Array.isArray(response?.ponds) ? response.ponds : []);
+        if (!active || !mountedRef.current) {
+          return;
+        }
+
+        /*
+         * Support the normal backend shape:
+         *
+         * {
+         *   ponds: [...]
+         * }
+         *
+         * and also a direct array response.
+         */
+
+        const pondRecords = Array.isArray(response?.ponds)
+          ? response.ponds
+          : Array.isArray(response)
+            ? response
+            : [];
+
+        setPonds(pondRecords);
       } catch (error) {
+        if (!active || !mountedRef.current) {
+          return;
+        }
+
         console.error("Pond loading error:", error);
 
         toast.error(error?.message || "Unable to load ponds.");
@@ -194,36 +254,118 @@ export default function Mortality() {
     };
 
     loadPonds();
+
+    return () => {
+      active = false;
+    };
   }, []);
 
   /*
    * ============================================================
-   * RELOAD RECORDS
+   * LOAD MORTALITY DATA
+   * ============================================================
+   */
+
+  const load = useCallback(async () => {
+    const requestId = ++loadRequestIdRef.current;
+
+    try {
+      setLoading(true);
+
+      const filter = pond
+        ? {
+            page,
+            limit: PAGE_LIMIT,
+            pond,
+          }
+        : {
+            page,
+            limit: PAGE_LIMIT,
+          };
+
+      const summaryFilter = pond
+        ? {
+            pond,
+          }
+        : {};
+
+      const [recordsResponse, summaryResponse] = await Promise.all([
+        api.mortality.list(filter),
+        api.mortality.summary(summaryFilter),
+      ]);
+
+      /*
+       * If another request started after this request,
+       * ignore this older response.
+       */
+
+      if (requestId !== loadRequestIdRef.current || !mountedRef.current) {
+        return;
+      }
+
+      const records = Array.isArray(recordsResponse?.records)
+        ? recordsResponse.records
+        : Array.isArray(recordsResponse)
+          ? recordsResponse
+          : [];
+
+      const responsePagination = recordsResponse?.pagination;
+
+      setRows(records);
+
+      setPagination({
+        ...EMPTY_PAGINATION,
+        ...(responsePagination || {}),
+        page:
+          Number(responsePagination?.page) > 0
+            ? Number(responsePagination.page)
+            : page,
+        limit:
+          Number(responsePagination?.limit) > 0
+            ? Number(responsePagination.limit)
+            : PAGE_LIMIT,
+      });
+
+      setSummary({
+        ...EMPTY_SUMMARY,
+        ...(summaryResponse || {}),
+      });
+    } catch (error) {
+      if (requestId !== loadRequestIdRef.current || !mountedRef.current) {
+        return;
+      }
+
+      console.error("Mortality load error:", error);
+
+      toast.error(error?.message || "Unable to load mortality records.");
+    } finally {
+      if (requestId === loadRequestIdRef.current && mountedRef.current) {
+        setLoading(false);
+      }
+    }
+  }, [page, pond]);
+
+  /*
+   * ============================================================
+   * RELOAD WHEN PAGE OR POND FILTER CHANGES
    * ============================================================
    */
 
   useEffect(() => {
     load();
-  }, [page, pond]);
+  }, [load]);
 
   /*
    * ============================================================
-   * RESET FORM
+   * RESET CREATE FORM
    * ============================================================
    */
 
-  const resetCreateForm = () => {
-    reset({
-      date: toInputDate(),
-      pond: "",
-      quantity: 1,
-      estimatedCause: "unknown",
-      notes: "",
-      images: null,
-    });
+  const resetCreateForm = useCallback(() => {
+    reset(getDefaultFormValues());
 
     setRemoveExistingImages(false);
-  };
+  }, [reset]);
 
   /*
    * ============================================================
@@ -232,6 +374,15 @@ export default function Mortality() {
    */
 
   const openCreateDialog = () => {
+    /*
+     * Never open another create dialog while a submission
+     * is currently being processed.
+     */
+
+    if (submitting || submitLockRef.current) {
+      return;
+    }
+
     setEditingRecord(null);
 
     resetCreateForm();
@@ -251,6 +402,10 @@ export default function Mortality() {
       return;
     }
 
+    if (submitting || submitLockRef.current) {
+      return;
+    }
+
     setEditingRecord(record);
 
     setRemoveExistingImages(false);
@@ -259,7 +414,9 @@ export default function Mortality() {
       date: toInputDate(record.date),
       pond:
         typeof record.pond === "string" ? record.pond : record.pond?._id || "",
-      quantity: Number(record.quantity) || 1,
+      quantity: Number.isFinite(Number(record.quantity))
+        ? Number(record.quantity)
+        : 1,
       estimatedCause: record.estimatedCause || "unknown",
       notes: record.notes || "",
       images: null,
@@ -270,12 +427,19 @@ export default function Mortality() {
 
   /*
    * ============================================================
-   * CLOSE CREATE / EDIT DIALOG
+   * CLOSE FORM DIALOG
    * ============================================================
    */
 
   const closeFormDialog = () => {
-    if (submitting) {
+    /*
+     * Never close/reset while the request is running.
+     *
+     * Otherwise a user could potentially start another operation
+     * while the first API request is still active.
+     */
+
+    if (submitting || submitLockRef.current) {
       return;
     }
 
@@ -295,71 +459,139 @@ export default function Mortality() {
    */
 
   const submit = async (data) => {
+    /*
+     * ==========================================================
+     * HARD CLIENT-SIDE SUBMISSION LOCK
+     * ==========================================================
+     *
+     * This check MUST happen before setSubmitting().
+     *
+     * The ref is synchronous and therefore prevents two submit
+     * events from entering this function at the same time.
+     */
+
+    if (submitLockRef.current) {
+      return;
+    }
+
+    submitLockRef.current = true;
+
+    setSubmitting(true);
+
+    const recordBeingEdited = editingRecord;
+
     try {
-      setSubmitting(true);
+      /*
+       * ========================================================
+       * FINAL CLIENT-SIDE VALIDATION
+       * ========================================================
+       */
+
+      const selectedDate = String(data?.date || "").trim();
+      const selectedPond = String(data?.pond || "").trim();
+      const quantity = Number(data?.quantity);
+
+      if (!selectedDate) {
+        toast.error("Mortality date is required.");
+        return;
+      }
+
+      if (!selectedPond) {
+        toast.error("Please select a pond.");
+        return;
+      }
+
+      if (!Number.isInteger(quantity) || quantity < 1) {
+        toast.error(
+          "Mortality quantity must be a whole number greater than zero.",
+        );
+        return;
+      }
+
+      /*
+       * ========================================================
+       * IMAGE VALIDATION
+       * ========================================================
+       */
+
+      const selectedFiles =
+        data?.images && data.images.length ? Array.from(data.images) : [];
+
+      if (selectedFiles.length > MAX_IMAGES) {
+        toast.error(`You can upload a maximum of ${MAX_IMAGES} images.`);
+        return;
+      }
+
+      const invalidType = selectedFiles.find(
+        (file) => !ALLOWED_IMAGE_TYPES.includes(file.type),
+      );
+
+      if (invalidType) {
+        toast.error("Only JPEG, PNG, WebP, and GIF images are allowed.");
+        return;
+      }
+
+      const oversizedFile = selectedFiles.find(
+        (file) => file.size > MAX_IMAGE_SIZE,
+      );
+
+      if (oversizedFile) {
+        toast.error("Each image must be 5MB or smaller.");
+        return;
+      }
+
+      /*
+       * ========================================================
+       * FORM DATA
+       * ========================================================
+       */
 
       const formData = new FormData();
 
-      /*
-       * Date
-       */
-      formData.append("date", data.date);
+      formData.append("date", selectedDate);
+
+      formData.append("pond", selectedPond);
+
+      formData.append("quantity", String(quantity));
+
+      formData.append(
+        "estimatedCause",
+        String(data?.estimatedCause || "unknown"),
+      );
+
+      formData.append("notes", String(data?.notes || "").trim());
 
       /*
-       * Pond
-       */
-      formData.append("pond", data.pond);
-
-      /*
-       * Quantity
-       */
-      formData.append("quantity", String(Number(data.quantity)));
-
-      /*
-       * Cause
-       */
-      formData.append("estimatedCause", data.estimatedCause || "unknown");
-
-      /*
-       * Notes
-       */
-      formData.append("notes", data.notes?.trim() || "");
-
-      /*
-       * Existing image handling during UPDATE.
+       * Existing image behavior applies ONLY to update.
        *
-       * This field is ignored by CREATE.
-       *
-       * On UPDATE:
-       *
-       * false -> keep existing images
-       * true  -> remove existing images
+       * CREATE does not need removeImage.
        */
-      if (editingRecord) {
+
+      if (recordBeingEdited?._id) {
         formData.append("removeImage", removeExistingImages ? "true" : "false");
       }
 
       /*
-       * New images.
-       *
-       * Sending new images to the backend replaces the
-       * existing mortality images.
-       *
-       * Backend supports maximum 5.
+       * Append each file separately using the backend's
+       * expected "images" field.
        */
-      if (data.images && data.images.length > 0) {
-        Array.from(data.images)
-          .slice(0, 5)
-          .forEach((file) => {
-            formData.append("images", file);
-          });
-      }
+
+      selectedFiles.slice(0, MAX_IMAGES).forEach((file) => {
+        formData.append("images", file);
+      });
 
       /*
+       * ========================================================
        * CREATE
+       * ========================================================
        */
-      if (!editingRecord) {
+
+      if (!recordBeingEdited?._id) {
         await api.mortality.create(formData);
+
+        if (!mountedRef.current) {
+          return;
+        }
 
         toast.success(
           "Mortality recorded successfully. Pond fish count has been synchronized.",
@@ -367,9 +599,15 @@ export default function Mortality() {
       } else {
 
       /*
+       * ========================================================
        * UPDATE
+       * ========================================================
        */
-        await api.mortality.update(editingRecord._id, formData);
+        await api.mortality.update(recordBeingEdited._id, formData);
+
+        if (!mountedRef.current) {
+          return;
+        }
 
         toast.success(
           "Mortality record updated successfully. Pond fish count has been synchronized.",
@@ -377,8 +615,11 @@ export default function Mortality() {
       }
 
       /*
-       * Close and reset.
+       * ========================================================
+       * SUCCESS CLEANUP
+       * ========================================================
        */
+
       setOpen(false);
 
       setEditingRecord(null);
@@ -388,8 +629,14 @@ export default function Mortality() {
       resetCreateForm();
 
       /*
-       * Always return to page 1 after create/update.
+       * After create/update, return to first page.
+       *
+       * If already on page 1, manually reload.
+       *
+       * If on another page, changing page to 1 causes the
+       * useEffect above to load the records.
        */
+
       if (page !== 1) {
         setPage(1);
       } else {
@@ -397,39 +644,51 @@ export default function Mortality() {
       }
     } catch (error) {
       console.error(
-        editingRecord ? "Mortality update error:" : "Mortality creation error:",
+        recordBeingEdited
+          ? "Mortality update error:"
+          : "Mortality creation error:",
         error,
       );
 
-      toast.error(
-        error?.message ||
-          (editingRecord
-            ? "Unable to update mortality record."
-            : "Unable to record mortality."),
-      );
+      if (mountedRef.current) {
+        toast.error(
+          error?.message ||
+            (recordBeingEdited
+              ? "Unable to update mortality record."
+              : "Unable to record mortality."),
+        );
+      }
     } finally {
-      setSubmitting(false);
+      /*
+       * ========================================================
+       * RELEASE SUBMISSION LOCK
+       * ========================================================
+       *
+       * This MUST happen after the API request has completely
+       * finished.
+       */
+
+      submitLockRef.current = false;
+
+      if (mountedRef.current) {
+        setSubmitting(false);
+      }
     }
   };
 
   /*
    * ============================================================
-   * PERMANENT DELETE
+   * DELETE MORTALITY
    * ============================================================
    *
-   * IMPORTANT:
+   * This is a HARD DELETE.
+   * It calls:
    *
-   * This calls:
+   * DELETE /mortality/:id
    *
-   * DELETE /api/mortality/:id
+   * through:
    *
-   * The backend service uses:
-   *
-   * Mortality.deleteOne(...)
-   *
-   * Therefore this is a HARD DELETE from MongoDB.
-   *
-   * It is NOT a soft delete.
+   * api.mortality.remove(id)
    * ============================================================
    */
 
@@ -440,8 +699,22 @@ export default function Mortality() {
     }
 
     /*
-     * Explicit irreversible confirmation.
+     * Do not allow deletion while another create/update
+     * operation is in progress.
      */
+
+    if (submitting || submitLockRef.current) {
+      return;
+    }
+
+    /*
+     * Do not allow two delete requests for the same record.
+     */
+
+    if (deletingId === record._id) {
+      return;
+    }
+
     const confirmed = window.confirm(
       `Permanently delete this mortality record?\n\n` +
         `Date: ${formatDate(record.date)}\n` +
@@ -457,40 +730,45 @@ export default function Mortality() {
     try {
       setDeletingId(record._id);
 
-      /*
-       * HARD DELETE
-       */
       await api.mortality.remove(record._id);
+
+      if (!mountedRef.current) {
+        return;
+      }
 
       toast.success(
         "Mortality record permanently deleted. Pond fish count has been synchronized.",
       );
 
       /*
-       * If this was the last record on the current page,
-       * move back one page when possible.
+       * If this was the only record on the page and we are
+       * not on page 1, move back one page.
        */
-      const isLastRecordOnPage = rows.length === 1;
 
-      if (isLastRecordOnPage && page > 1) {
-        setPage((currentPage) => currentPage - 1);
+      if (rows.length === 1 && page > 1) {
+        setPage((currentPage) => Math.max(1, currentPage - 1));
       } else {
         await load();
       }
     } catch (error) {
       console.error("Permanent mortality deletion error:", error);
 
-      toast.error(
-        error?.message || "Unable to permanently delete the mortality record.",
-      );
+      if (mountedRef.current) {
+        toast.error(
+          error?.message ||
+            "Unable to permanently delete the mortality record.",
+        );
+      }
     } finally {
-      setDeletingId(null);
+      if (mountedRef.current) {
+        setDeletingId(null);
+      }
     }
   };
 
   /*
    * ============================================================
-   * IMAGE HELPERS
+   * IMAGE URL HELPER
    * ============================================================
    */
 
@@ -522,17 +800,27 @@ export default function Mortality() {
     return "";
   };
 
+  /*
+   * ============================================================
+   * GET MORTALITY IMAGES
+   * ============================================================
+   */
+
   const getImages = (row) => {
     if (!row) {
       return [];
     }
 
-    if (Array.isArray(row.images) && row.images.length) {
+    if (Array.isArray(row.images) && row.images.length > 0) {
       return row.images
         .map((image) => extractImageUrl(image))
         .filter(Boolean)
-        .slice(0, 5);
+        .slice(0, MAX_IMAGES);
     }
+
+    /*
+     * Backward-compatible single-image fallbacks.
+     */
 
     const fallbacks = [row.image, row.imageUrl, row.imageURL];
 
@@ -554,12 +842,17 @@ export default function Mortality() {
    */
 
   const openGallery = (images, index = 0) => {
-    if (!images.length) {
+    if (!Array.isArray(images) || images.length === 0) {
       return;
     }
 
+    const safeIndex = Math.min(
+      Math.max(Number(index) || 0, 0),
+      images.length - 1,
+    );
+
     setGallery(images);
-    setGalleryIndex(index);
+    setGalleryIndex(safeIndex);
   };
 
   const closeGallery = () => {
@@ -568,16 +861,56 @@ export default function Mortality() {
   };
 
   const showPrevImage = () => {
-    setGalleryIndex((current) =>
-      gallery ? (current - 1 + gallery.length) % gallery.length : 0,
-    );
+    setGalleryIndex((current) => {
+      if (!gallery?.length) {
+        return 0;
+      }
+
+      return (current - 1 + gallery.length) % gallery.length;
+    });
   };
 
   const showNextImage = () => {
-    setGalleryIndex((current) =>
-      gallery ? (current + 1) % gallery.length : 0,
-    );
+    setGalleryIndex((current) => {
+      if (!gallery?.length) {
+        return 0;
+      }
+
+      return (current + 1) % gallery.length;
+    });
   };
+
+  /*
+   * ============================================================
+   * KEYBOARD GALLERY CONTROLS
+   * ============================================================
+   */
+
+  useEffect(() => {
+    if (!gallery?.length) {
+      return undefined;
+    }
+
+    const handleKeyDown = (event) => {
+      if (event.key === "Escape") {
+        closeGallery();
+      }
+
+      if (event.key === "ArrowLeft" && gallery.length > 1) {
+        showPrevImage();
+      }
+
+      if (event.key === "ArrowRight" && gallery.length > 1) {
+        showNextImage();
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [gallery]);
 
   /*
    * ============================================================
@@ -636,9 +969,12 @@ export default function Mortality() {
         <div className="mb-5 flex justify-end">
           <Select
             value={pond}
+            disabled={loading || submitting || Boolean(deletingId)}
             onChange={(event) => {
+              const value = event.target.value;
+
               setPage(1);
-              setPond(event.target.value);
+              setPond(value);
             }}
             className="w-full md:w-56"
           >
@@ -675,31 +1011,39 @@ export default function Mortality() {
               <TBody>
                 {rows.map((row) => {
                   const images = getImages(row);
+
                   const imageUrl = images[0] || "";
+
                   const isDeleting = deletingId === row._id;
 
                   return (
                     <TR key={row._id}>
                       {/* DATE */}
+
                       <TD>{formatDate(row.date)}</TD>
 
                       {/* POND */}
+
                       <TD className="font-bold">{pondName(row.pond)}</TD>
 
                       {/* QUANTITY */}
+
                       <TD className="font-black text-red-600">
                         {formatNumber(row.quantity)}
                       </TD>
 
                       {/* CAUSE */}
+
                       <TD>{labelize(row.estimatedCause || "unknown")}</TD>
 
                       {/* NOTES */}
+
                       <TD className="max-w-xs truncate text-[var(--muted)]">
                         {row.notes || "—"}
                       </TD>
 
                       {/* IMAGE */}
+
                       <TD>
                         {imageUrl ? (
                           <button
@@ -721,7 +1065,7 @@ export default function Mortality() {
                               loading="lazy"
                               onError={(event) => {
                                 console.error(
-                                  "FAILED TO LOAD MORTALITY IMAGE:",
+                                  "Failed to load mortality image:",
                                   imageUrl,
                                 );
 
@@ -745,13 +1089,17 @@ export default function Mortality() {
                       </TD>
 
                       {/* ACTIONS */}
+
                       <TD>
                         <div className="flex items-center justify-end gap-2">
                           {/* EDIT */}
+
                           <button
                             type="button"
                             onClick={() => openEditDialog(row)}
-                            disabled={isDeleting || submitting}
+                            disabled={
+                              isDeleting || submitting || Boolean(deletingId)
+                            }
                             title="Edit mortality record"
                             aria-label="Edit mortality record"
                             className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-[var(--border)] text-[var(--muted)] transition hover:border-[var(--primary)] hover:bg-[var(--primary)]/10 hover:text-[var(--primary)] disabled:cursor-not-allowed disabled:opacity-50"
@@ -759,11 +1107,16 @@ export default function Mortality() {
                             <Edit3 className="h-4 w-4" />
                           </button>
 
-                          {/* PERMANENT DELETE */}
+                          {/* DELETE */}
+
                           <button
                             type="button"
                             onClick={() => handleDelete(row)}
-                            disabled={isDeleting || submitting}
+                            disabled={
+                              isDeleting ||
+                              submitting ||
+                              Boolean(deletingId && deletingId !== row._id)
+                            }
                             title="Permanently delete mortality record"
                             aria-label="Permanently delete mortality record"
                             className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-red-200 text-red-500 transition hover:bg-red-50 hover:text-red-700 disabled:cursor-not-allowed disabled:opacity-50 dark:border-red-900/40 dark:hover:bg-red-950/30"
@@ -789,9 +1142,15 @@ export default function Mortality() {
         )}
 
         <Pagination
-          page={pagination.page}
-          pages={pagination.pages}
-          onChange={setPage}
+          page={Number(pagination?.page) || page}
+          pages={Number(pagination?.pages) || 1}
+          onChange={(nextPage) => {
+            const safePage = Math.max(1, Number(nextPage) || 1);
+
+            if (safePage !== page && !loading && !submitting) {
+              setPage(safePage);
+            }
+          }}
         />
       </Card>
 
@@ -804,7 +1163,7 @@ export default function Mortality() {
         onOpenChange={(nextOpen) => {
           if (!nextOpen) {
             closeFormDialog();
-          } else {
+          } else if (!submitting && !submitLockRef.current) {
             setOpen(true);
           }
         }}
@@ -820,6 +1179,7 @@ export default function Mortality() {
           className="grid gap-5 sm:grid-cols-2"
         >
           {/* DATE */}
+
           <div>
             <Label htmlFor="mortality-date" required>
               Date
@@ -828,6 +1188,7 @@ export default function Mortality() {
             <Input
               id="mortality-date"
               type="date"
+              disabled={submitting}
               {...register("date", {
                 required: "Mortality date is required.",
               })}
@@ -841,6 +1202,7 @@ export default function Mortality() {
           </div>
 
           {/* POND */}
+
           <div>
             <Label htmlFor="mortality-pond" required>
               Pond
@@ -848,6 +1210,7 @@ export default function Mortality() {
 
             <Select
               id="mortality-pond"
+              disabled={submitting}
               {...register("pond", {
                 required: "Please select a pond.",
               })}
@@ -869,6 +1232,7 @@ export default function Mortality() {
           </div>
 
           {/* QUANTITY */}
+
           <div>
             <Label htmlFor="mortality-quantity" required>
               Quantity
@@ -879,6 +1243,7 @@ export default function Mortality() {
               type="number"
               min="1"
               step="1"
+              disabled={submitting}
               {...register("quantity", {
                 required: "Mortality quantity is required.",
 
@@ -889,8 +1254,17 @@ export default function Mortality() {
                   message: "Quantity must be at least 1.",
                 },
 
-                validate: (value) =>
-                  Number.isInteger(value) || "Quantity must be a whole number.",
+                validate: (value) => {
+                  if (!Number.isInteger(value)) {
+                    return "Quantity must be a whole number.";
+                  }
+
+                  if (value < 1) {
+                    return "Quantity must be at least 1.";
+                  }
+
+                  return true;
+                },
               })}
             />
 
@@ -902,10 +1276,15 @@ export default function Mortality() {
           </div>
 
           {/* CAUSE */}
+
           <div>
             <Label htmlFor="mortality-cause">Estimated cause</Label>
 
-            <Select id="mortality-cause" {...register("estimatedCause")}>
+            <Select
+              id="mortality-cause"
+              disabled={submitting}
+              {...register("estimatedCause")}
+            >
               {MORTALITY_CAUSES.map((cause) => (
                 <option key={cause} value={cause}>
                   {labelize(cause)}
@@ -915,15 +1294,17 @@ export default function Mortality() {
           </div>
 
           {/* NOTES */}
+
           <div className="sm:col-span-2">
             <Label htmlFor="mortality-notes">Notes</Label>
 
             <textarea
               id="mortality-notes"
+              disabled={submitting}
               {...register("notes")}
               maxLength={3000}
               placeholder="Optional notes about the mortality..."
-              className="min-h-24 w-full rounded-xl border border-[var(--border)] bg-transparent p-3 text-sm outline-none focus:border-[var(--primary)]"
+              className="min-h-24 w-full rounded-xl border border-[var(--border)] bg-transparent p-3 text-sm outline-none focus:border-[var(--primary)] disabled:cursor-not-allowed disabled:opacity-60"
             />
           </div>
 
@@ -953,13 +1334,15 @@ export default function Mortality() {
                         <button
                           key={`${imageUrl}-${index}`}
                           type="button"
+                          disabled={submitting}
                           onClick={() => openGallery(existingImages, index)}
-                          className="group relative h-20 w-20 overflow-hidden rounded-xl border border-[var(--border)]"
+                          className="group relative h-20 w-20 overflow-hidden rounded-xl border border-[var(--border)] disabled:cursor-not-allowed disabled:opacity-60"
                         >
                           <img
                             src={imageUrl}
                             alt={`Existing mortality image ${index + 1}`}
                             className="h-full w-full object-cover transition group-hover:scale-105"
+                            loading="lazy"
                           />
 
                           <span className="absolute inset-0 flex items-center justify-center bg-black/0 transition group-hover:bg-black/40">
@@ -973,6 +1356,7 @@ export default function Mortality() {
                       <input
                         type="checkbox"
                         checked={removeExistingImages}
+                        disabled={submitting}
                         onChange={(event) =>
                           setRemoveExistingImages(event.target.checked)
                         }
@@ -1008,6 +1392,7 @@ export default function Mortality() {
               id="mortality-image"
               type="file"
               multiple
+              disabled={submitting}
               accept="image/jpeg,image/png,image/webp,image/gif"
               {...register("images", {
                 validate: {
@@ -1017,8 +1402,8 @@ export default function Mortality() {
                     }
 
                     return (
-                      files.length <= 5 ||
-                      "You can upload a maximum of 5 images."
+                      files.length <= MAX_IMAGES ||
+                      `You can upload a maximum of ${MAX_IMAGES} images.`
                     );
                   },
 
@@ -1029,7 +1414,7 @@ export default function Mortality() {
 
                     return (
                       Array.from(files).every(
-                        (file) => file.size <= 5 * 1024 * 1024,
+                        (file) => file.size <= MAX_IMAGE_SIZE,
                       ) || "Each image must be 5MB or smaller."
                     );
                   },
@@ -1039,16 +1424,9 @@ export default function Mortality() {
                       return true;
                     }
 
-                    const allowed = [
-                      "image/jpeg",
-                      "image/png",
-                      "image/webp",
-                      "image/gif",
-                    ];
-
                     return (
                       Array.from(files).every((file) =>
-                        allowed.includes(file.type),
+                        ALLOWED_IMAGE_TYPES.includes(file.type),
                       ) || "Only JPEG, PNG, WebP, and GIF images are allowed."
                     );
                   },
@@ -1070,16 +1448,20 @@ export default function Mortality() {
               <div className="mt-3 space-y-2">
                 {Array.from(imageFiles).map((file, index) => (
                   <div
-                    key={`${file.name}-${index}`}
+                    key={`${file.name}-${file.size}-${file.lastModified}-${index}`}
                     className="flex items-center justify-between rounded-xl border border-[var(--border)] p-3"
                   >
-                    <div className="flex items-center gap-2">
-                      <ImageIcon className="h-4 w-4" />
+                    <div className="flex min-w-0 items-center gap-2">
+                      <ImageIcon className="h-4 w-4 shrink-0" />
 
                       <span className="max-w-xs truncate text-sm font-medium">
                         {file.name}
                       </span>
                     </div>
+
+                    <span className="ml-3 shrink-0 text-xs text-[var(--muted)]">
+                      {(file.size / (1024 * 1024)).toFixed(2)} MB
+                    </span>
                   </div>
                 ))}
               </div>
@@ -1094,13 +1476,16 @@ export default function Mortality() {
             <Button
               type="button"
               variant="outline"
-              disabled={submitting}
+              disabled={submitting || submitLockRef.current}
               onClick={closeFormDialog}
             >
               Cancel
             </Button>
 
-            <Button type="submit" disabled={submitting}>
+            <Button
+              type="submit"
+              disabled={submitting || submitLockRef.current}
+            >
               {submitting ? (
                 <>
                   <Loader2 className="mr-2 h-4 w-4 animate-spin" />
@@ -1125,22 +1510,27 @@ export default function Mortality() {
         <div
           className="fixed inset-0 z-[100] flex items-center justify-center bg-black/80 p-4 backdrop-blur-sm"
           onClick={closeGallery}
+          role="dialog"
+          aria-modal="true"
+          aria-label="Mortality image gallery"
         >
           <div
             className="relative flex max-h-[92vh] max-w-5xl items-center justify-center overflow-hidden rounded-2xl bg-black shadow-2xl"
             onClick={(event) => event.stopPropagation()}
           >
             {/* CLOSE */}
+
             <button
               type="button"
               onClick={closeGallery}
               className="absolute right-3 top-3 z-20 rounded-full bg-black/70 p-2 text-white transition hover:bg-black"
-              aria-label="Close image"
+              aria-label="Close image gallery"
             >
               <X className="h-5 w-5" />
             </button>
 
             {/* PREVIOUS / NEXT */}
+
             {gallery.length > 1 && (
               <>
                 <button
