@@ -8,9 +8,11 @@ import {
   AlertTriangle,
   Image as ImageIcon,
   X,
-  ExternalLink,
   ChevronLeft,
   ChevronRight,
+  Edit3,
+  Trash2,
+  Loader2,
 } from "lucide-react";
 
 import { useForm } from "react-hook-form";
@@ -56,126 +58,42 @@ export default function Mortality() {
 
   const [page, setPage] = useState(1);
   const [pond, setPond] = useState("");
+
+  /*
+   * CREATE / EDIT DIALOG
+   */
   const [open, setOpen] = useState(false);
+  const [editingRecord, setEditingRecord] = useState(null);
+
+  /*
+   * Loading states
+   */
   const [loading, setLoading] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const [deletingId, setDeletingId] = useState(null);
 
-  /**
-   * Gallery viewer state.
+  /*
+   * Existing image removal during edit.
    *
-   * gallery: array of image URLs for the row currently
-   * being viewed (up to 5).
+   * Backend expects:
    *
-   * galleryIndex: which image in that array is showing.
+   * removeImage=true
+   *
+   * when the existing images should be removed.
+   */
+  const [removeExistingImages, setRemoveExistingImages] = useState(false);
+
+  /*
+   * Image gallery
    */
   const [gallery, setGallery] = useState(null);
   const [galleryIndex, setGalleryIndex] = useState(0);
 
-  /**
-   * Load mortality records + summary.
+  /*
+   * ============================================================
+   * FORM
+   * ============================================================
    */
-  const load = async () => {
-    try {
-      setLoading(true);
-
-      const [recordsResponse, summaryResponse] = await Promise.all([
-        api.mortality.list({
-          page,
-          limit: 30,
-          pond,
-        }),
-
-        api.mortality.summary({
-          pond,
-        }),
-      ]);
-      console.log("========== MORTALITY API RESPONSE ==========");
-
-      console.log("recordsResponse:", recordsResponse);
-
-      console.log("records:", recordsResponse?.records);
-
-      console.log("first record:", recordsResponse?.records?.[0]);
-
-      console.log("first record image:", recordsResponse?.records?.[0]?.image);
-
-      console.log(
-        "first record image URL:",
-        recordsResponse?.records?.[0]?.image?.url,
-      );
-
-      console.log("============================================");
-      /**
-       * Records.
-       */
-      setRows(
-        Array.isArray(recordsResponse?.records) ? recordsResponse.records : [],
-      );
-
-      /**
-       * Pagination.
-       */
-      setPagination(
-        recordsResponse?.pagination || {
-          page,
-          pages: 1,
-          total: 0,
-          limit: 30,
-        },
-      );
-
-      /**
-       * Summary.
-       *
-       * api.mortality.summary()
-       * already unwraps the backend
-       * { summary: {...} } response.
-       */
-      setSummary(
-        summaryResponse || {
-          totalMortality: 0,
-          records: 0,
-          byPond: [],
-          byCause: [],
-        },
-      );
-    } catch (error) {
-      console.error("Mortality load error:", error);
-
-      toast.error(error?.message || "Unable to load mortality records.");
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  /**
-   * Load ponds.
-   */
-  useEffect(() => {
-    const loadPonds = async () => {
-      try {
-        const response = await api.ponds.list({
-          limit: 100,
-        });
-
-        setPonds(Array.isArray(response?.ponds) ? response.ponds : []);
-      } catch (error) {
-        console.error("Pond loading error:", error);
-
-        toast.error(error?.message || "Unable to load ponds.");
-      }
-    };
-
-    loadPonds();
-  }, []);
-
-  /**
-   * Reload whenever page or
-   * selected pond changes.
-   */
-  useEffect(() => {
-    load();
-  }, [page, pond]);
 
   const {
     register,
@@ -196,10 +114,105 @@ export default function Mortality() {
 
   const imageFiles = watch("images");
 
-  /**
-   * Open create dialog.
+  /*
+   * ============================================================
+   * LOAD MORTALITY RECORDS
+   * ============================================================
    */
-  const openCreateDialog = () => {
+
+  const load = async () => {
+    try {
+      setLoading(true);
+
+      const [recordsResponse, summaryResponse] = await Promise.all([
+        api.mortality.list({
+          page,
+          limit: 30,
+          ...(pond ? { pond } : {}),
+        }),
+
+        api.mortality.summary({
+          ...(pond ? { pond } : {}),
+        }),
+      ]);
+
+      console.log("========== MORTALITY API RESPONSE ==========");
+      console.log("recordsResponse:", recordsResponse);
+      console.log("records:", recordsResponse?.records);
+      console.log("summaryResponse:", summaryResponse);
+      console.log("============================================");
+
+      setRows(
+        Array.isArray(recordsResponse?.records) ? recordsResponse.records : [],
+      );
+
+      setPagination(
+        recordsResponse?.pagination || {
+          page,
+          pages: 1,
+          total: 0,
+          limit: 30,
+        },
+      );
+
+      setSummary(
+        summaryResponse || {
+          totalMortality: 0,
+          records: 0,
+          byPond: [],
+          byCause: [],
+        },
+      );
+    } catch (error) {
+      console.error("Mortality load error:", error);
+
+      toast.error(error?.message || "Unable to load mortality records.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  /*
+   * ============================================================
+   * LOAD PONDS
+   * ============================================================
+   */
+
+  useEffect(() => {
+    const loadPonds = async () => {
+      try {
+        const response = await api.ponds.list({
+          limit: 100,
+        });
+
+        setPonds(Array.isArray(response?.ponds) ? response.ponds : []);
+      } catch (error) {
+        console.error("Pond loading error:", error);
+
+        toast.error(error?.message || "Unable to load ponds.");
+      }
+    };
+
+    loadPonds();
+  }, []);
+
+  /*
+   * ============================================================
+   * RELOAD RECORDS
+   * ============================================================
+   */
+
+  useEffect(() => {
+    load();
+  }, [page, pond]);
+
+  /*
+   * ============================================================
+   * RESET FORM
+   * ============================================================
+   */
+
+  const resetCreateForm = () => {
     reset({
       date: toInputDate(),
       pond: "",
@@ -209,30 +222,130 @@ export default function Mortality() {
       images: null,
     });
 
+    setRemoveExistingImages(false);
+  };
+
+  /*
+   * ============================================================
+   * OPEN CREATE DIALOG
+   * ============================================================
+   */
+
+  const openCreateDialog = () => {
+    setEditingRecord(null);
+
+    resetCreateForm();
+
     setOpen(true);
   };
 
-  /**
-   * Create mortality record.
+  /*
+   * ============================================================
+   * OPEN EDIT DIALOG
+   * ============================================================
    */
+
+  const openEditDialog = (record) => {
+    if (!record?._id) {
+      toast.error("Unable to edit this mortality record.");
+      return;
+    }
+
+    setEditingRecord(record);
+
+    setRemoveExistingImages(false);
+
+    reset({
+      date: toInputDate(record.date),
+      pond:
+        typeof record.pond === "string" ? record.pond : record.pond?._id || "",
+      quantity: Number(record.quantity) || 1,
+      estimatedCause: record.estimatedCause || "unknown",
+      notes: record.notes || "",
+      images: null,
+    });
+
+    setOpen(true);
+  };
+
+  /*
+   * ============================================================
+   * CLOSE CREATE / EDIT DIALOG
+   * ============================================================
+   */
+
+  const closeFormDialog = () => {
+    if (submitting) {
+      return;
+    }
+
+    setOpen(false);
+
+    setEditingRecord(null);
+
+    setRemoveExistingImages(false);
+
+    resetCreateForm();
+  };
+
+  /*
+   * ============================================================
+   * CREATE / UPDATE MORTALITY
+   * ============================================================
+   */
+
   const submit = async (data) => {
     try {
       setSubmitting(true);
 
       const formData = new FormData();
 
+      /*
+       * Date
+       */
       formData.append("date", data.date);
 
+      /*
+       * Pond
+       */
       formData.append("pond", data.pond);
 
+      /*
+       * Quantity
+       */
       formData.append("quantity", String(Number(data.quantity)));
 
+      /*
+       * Cause
+       */
       formData.append("estimatedCause", data.estimatedCause || "unknown");
 
+      /*
+       * Notes
+       */
       formData.append("notes", data.notes?.trim() || "");
 
-      /**
-       * Attach images (up to 5).
+      /*
+       * Existing image handling during UPDATE.
+       *
+       * This field is ignored by CREATE.
+       *
+       * On UPDATE:
+       *
+       * false -> keep existing images
+       * true  -> remove existing images
+       */
+      if (editingRecord) {
+        formData.append("removeImage", removeExistingImages ? "true" : "false");
+      }
+
+      /*
+       * New images.
+       *
+       * Sending new images to the backend replaces the
+       * existing mortality images.
+       *
+       * Backend supports maximum 5.
        */
       if (data.images && data.images.length > 0) {
         Array.from(data.images)
@@ -242,44 +355,145 @@ export default function Mortality() {
           });
       }
 
-      await api.mortality.create(formData);
+      /*
+       * CREATE
+       */
+      if (!editingRecord) {
+        await api.mortality.create(formData);
 
-      toast.success(
-        "Mortality recorded successfully. Pond fish count has been synchronized.",
-      );
+        toast.success(
+          "Mortality recorded successfully. Pond fish count has been synchronized.",
+        );
+      } else {
 
+      /*
+       * UPDATE
+       */
+        await api.mortality.update(editingRecord._id, formData);
+
+        toast.success(
+          "Mortality record updated successfully. Pond fish count has been synchronized.",
+        );
+      }
+
+      /*
+       * Close and reset.
+       */
       setOpen(false);
 
-      reset({
-        date: toInputDate(),
-        pond: "",
-        quantity: 1,
-        estimatedCause: "unknown",
-        notes: "",
-        images: null,
-      });
+      setEditingRecord(null);
 
-      /**
-       * Reload the first page so
-       * the new record + metrics
-       * appear immediately.
+      setRemoveExistingImages(false);
+
+      resetCreateForm();
+
+      /*
+       * Always return to page 1 after create/update.
        */
-      setPage(1);
-
-      await load();
+      if (page !== 1) {
+        setPage(1);
+      } else {
+        await load();
+      }
     } catch (error) {
-      console.error("Mortality creation error:", error);
+      console.error(
+        editingRecord ? "Mortality update error:" : "Mortality creation error:",
+        error,
+      );
 
-      toast.error(error?.message || "Unable to record mortality.");
+      toast.error(
+        error?.message ||
+          (editingRecord
+            ? "Unable to update mortality record."
+            : "Unable to record mortality."),
+      );
     } finally {
       setSubmitting(false);
     }
   };
 
-  /**
-   * Get a single image URL out of one image-like value,
-   * trying every shape the backend has historically used.
+  /*
+   * ============================================================
+   * PERMANENT DELETE
+   * ============================================================
+   *
+   * IMPORTANT:
+   *
+   * This calls:
+   *
+   * DELETE /api/mortality/:id
+   *
+   * The backend service uses:
+   *
+   * Mortality.deleteOne(...)
+   *
+   * Therefore this is a HARD DELETE from MongoDB.
+   *
+   * It is NOT a soft delete.
+   * ============================================================
    */
+
+  const handleDelete = async (record) => {
+    if (!record?._id) {
+      toast.error("Unable to delete this mortality record.");
+      return;
+    }
+
+    /*
+     * Explicit irreversible confirmation.
+     */
+    const confirmed = window.confirm(
+      `Permanently delete this mortality record?\n\n` +
+        `Date: ${formatDate(record.date)}\n` +
+        `Pond: ${pondName(record.pond)}\n` +
+        `Quantity: ${formatNumber(record.quantity)} fish\n\n` +
+        `This action cannot be undone. The record will be permanently removed from MongoDB and its associated Cloudinary images will also be deleted.`,
+    );
+
+    if (!confirmed) {
+      return;
+    }
+
+    try {
+      setDeletingId(record._id);
+
+      /*
+       * HARD DELETE
+       */
+      await api.mortality.remove(record._id);
+
+      toast.success(
+        "Mortality record permanently deleted. Pond fish count has been synchronized.",
+      );
+
+      /*
+       * If this was the last record on the current page,
+       * move back one page when possible.
+       */
+      const isLastRecordOnPage = rows.length === 1;
+
+      if (isLastRecordOnPage && page > 1) {
+        setPage((currentPage) => currentPage - 1);
+      } else {
+        await load();
+      }
+    } catch (error) {
+      console.error("Permanent mortality deletion error:", error);
+
+      toast.error(
+        error?.message || "Unable to permanently delete the mortality record.",
+      );
+    } finally {
+      setDeletingId(null);
+    }
+  };
+
+  /*
+   * ============================================================
+   * IMAGE HELPERS
+   * ============================================================
+   */
+
   const extractImageUrl = (image) => {
     if (!image) {
       return "";
@@ -297,7 +511,10 @@ export default function Mortality() {
       return image.secure_url.trim();
     }
 
-    // Possible data wrapper
+    if (typeof image.secureUrl === "string" && image.secureUrl.trim()) {
+      return image.secureUrl.trim();
+    }
+
     if (typeof image.url?.url === "string" && image.url.url.trim()) {
       return image.url.url.trim();
     }
@@ -305,13 +522,6 @@ export default function Mortality() {
     return "";
   };
 
-  /**
-   * Get up to 5 image URLs from a record.
-   *
-   * Prefers the new `images` array; falls back to the
-   * legacy single `image` field (and other flattened
-   * shapes) for older records / API responses.
-   */
   const getImages = (row) => {
     if (!row) {
       return [];
@@ -337,10 +547,12 @@ export default function Mortality() {
     return [];
   };
 
-  /**
-   * Open the gallery viewer for a row's images,
-   * starting at the given index (defaults to the first).
+  /*
+   * ============================================================
+   * IMAGE GALLERY
+   * ============================================================
    */
+
   const openGallery = (images, index = 0) => {
     if (!images.length) {
       return;
@@ -367,6 +579,12 @@ export default function Mortality() {
     );
   };
 
+  /*
+   * ============================================================
+   * RENDER
+   * ============================================================
+   */
+
   return (
     <AdminLayout
       title="Mortality"
@@ -383,7 +601,10 @@ export default function Mortality() {
         }}
       />
 
-      {/* METRICS */}
+      {/* ======================================================
+          METRICS
+          ====================================================== */}
+
       <div className="grid gap-4 sm:grid-cols-3">
         <MetricCard
           label="Mortality"
@@ -407,14 +628,16 @@ export default function Mortality() {
         />
       </div>
 
-      {/* RECORDS */}
+      {/* ======================================================
+          RECORDS
+          ====================================================== */}
+
       <Card className="mt-5 p-5">
         <div className="mb-5 flex justify-end">
           <Select
             value={pond}
             onChange={(event) => {
               setPage(1);
-
               setPond(event.target.value);
             }}
             className="w-full md:w-56"
@@ -430,89 +653,135 @@ export default function Mortality() {
         </div>
 
         {loading ? (
-          <div className="py-14 text-center text-sm text-[var(--muted)]">
+          <div className="flex items-center justify-center gap-2 py-14 text-sm text-[var(--muted)]">
+            <Loader2 className="h-4 w-4 animate-spin" />
             Loading mortality records...
           </div>
         ) : rows.length ? (
-          <Table>
-            <THead>
-              <TR>
-                <TH>Date</TH>
-                <TH>Pond</TH>
-                <TH>Quantity</TH>
-                <TH>Cause</TH>
-                <TH>Notes</TH>
-                <TH>Image</TH>
-              </TR>
-            </THead>
+          <div className="overflow-x-auto">
+            <Table>
+              <THead>
+                <TR>
+                  <TH>Date</TH>
+                  <TH>Pond</TH>
+                  <TH>Quantity</TH>
+                  <TH>Cause</TH>
+                  <TH>Notes</TH>
+                  <TH>Image</TH>
+                  <TH className="text-right">Actions</TH>
+                </TR>
+              </THead>
 
-            <TBody>
-              {rows.map((row) => {
-                const images = getImages(row);
-                const imageUrl = images[0] || "";
+              <TBody>
+                {rows.map((row) => {
+                  const images = getImages(row);
+                  const imageUrl = images[0] || "";
+                  const isDeleting = deletingId === row._id;
 
-                return (
-                  <TR key={row._id}>
-                    <TD>{formatDate(row.date)}</TD>
+                  return (
+                    <TR key={row._id}>
+                      {/* DATE */}
+                      <TD>{formatDate(row.date)}</TD>
 
-                    <TD className="font-bold">{pondName(row.pond)}</TD>
+                      {/* POND */}
+                      <TD className="font-bold">{pondName(row.pond)}</TD>
 
-                    <TD className="font-black text-red-600">
-                      {formatNumber(row.quantity)}
-                    </TD>
+                      {/* QUANTITY */}
+                      <TD className="font-black text-red-600">
+                        {formatNumber(row.quantity)}
+                      </TD>
 
-                    <TD>{labelize(row.estimatedCause)}</TD>
+                      {/* CAUSE */}
+                      <TD>{labelize(row.estimatedCause || "unknown")}</TD>
 
-                    <TD className="max-w-xs truncate text-[var(--muted)]">
-                      {row.notes || "—"}
-                    </TD>
+                      {/* NOTES */}
+                      <TD className="max-w-xs truncate text-[var(--muted)]">
+                        {row.notes || "—"}
+                      </TD>
 
-                    <TD>
-                      {imageUrl ? (
-                        <button
-                          type="button"
-                          onClick={() => openGallery(images, 0)}
-                          className="group relative block h-14 w-14 overflow-hidden rounded-xl border border-[var(--border)] bg-[var(--muted)]/10 shadow-sm transition hover:scale-105 hover:shadow-md"
-                          title={
-                            images.length > 1
-                              ? `View ${images.length} mortality images`
-                              : "View mortality image"
-                          }
-                        >
-                          <img
-                            src={imageUrl}
-                            alt={`Mortality recorded on ${formatDate(row.date)}`}
-                            className="h-full w-full object-cover transition duration-200 group-hover:scale-110"
-                            loading="lazy"
-                            onError={(event) => {
-                              console.error(
-                                "FAILED TO LOAD MORTALITY IMAGE:",
-                                imageUrl,
-                              );
+                      {/* IMAGE */}
+                      <TD>
+                        {imageUrl ? (
+                          <button
+                            type="button"
+                            onClick={() => openGallery(images, 0)}
+                            className="group relative block h-14 w-14 overflow-hidden rounded-xl border border-[var(--border)] bg-[var(--muted)]/10 shadow-sm transition hover:scale-105 hover:shadow-md"
+                            title={
+                              images.length > 1
+                                ? `View ${images.length} mortality images`
+                                : "View mortality image"
+                            }
+                          >
+                            <img
+                              src={imageUrl}
+                              alt={`Mortality recorded on ${formatDate(
+                                row.date,
+                              )}`}
+                              className="h-full w-full object-cover transition duration-200 group-hover:scale-110"
+                              loading="lazy"
+                              onError={(event) => {
+                                console.error(
+                                  "FAILED TO LOAD MORTALITY IMAGE:",
+                                  imageUrl,
+                                );
 
-                              event.currentTarget.style.opacity = "0.3";
-                            }}
-                          />
+                                event.currentTarget.style.opacity = "0.3";
+                              }}
+                            />
 
-                          <span className="absolute inset-0 flex items-center justify-center bg-black/0 transition group-hover:bg-black/40">
-                            <ImageIcon className="h-5 w-5 text-white opacity-0 transition group-hover:opacity-100" />
-                          </span>
-
-                          {images.length > 1 && (
-                            <span className="absolute bottom-0.5 right-0.5 rounded-md bg-black/70 px-1.5 py-0.5 text-[10px] font-bold text-white">
-                              +{images.length - 1}
+                            <span className="absolute inset-0 flex items-center justify-center bg-black/0 transition group-hover:bg-black/40">
+                              <ImageIcon className="h-5 w-5 text-white opacity-0 transition group-hover:opacity-100" />
                             </span>
-                          )}
-                        </button>
-                      ) : (
-                        <span className="text-sm text-[var(--muted)]">—</span>
-                      )}
-                    </TD>
-                  </TR>
-                );
-              })}
-            </TBody>
-          </Table>
+
+                            {images.length > 1 && (
+                              <span className="absolute bottom-0.5 right-0.5 rounded-md bg-black/70 px-1.5 py-0.5 text-[10px] font-bold text-white">
+                                +{images.length - 1}
+                              </span>
+                            )}
+                          </button>
+                        ) : (
+                          <span className="text-sm text-[var(--muted)]">—</span>
+                        )}
+                      </TD>
+
+                      {/* ACTIONS */}
+                      <TD>
+                        <div className="flex items-center justify-end gap-2">
+                          {/* EDIT */}
+                          <button
+                            type="button"
+                            onClick={() => openEditDialog(row)}
+                            disabled={isDeleting || submitting}
+                            title="Edit mortality record"
+                            aria-label="Edit mortality record"
+                            className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-[var(--border)] text-[var(--muted)] transition hover:border-[var(--primary)] hover:bg-[var(--primary)]/10 hover:text-[var(--primary)] disabled:cursor-not-allowed disabled:opacity-50"
+                          >
+                            <Edit3 className="h-4 w-4" />
+                          </button>
+
+                          {/* PERMANENT DELETE */}
+                          <button
+                            type="button"
+                            onClick={() => handleDelete(row)}
+                            disabled={isDeleting || submitting}
+                            title="Permanently delete mortality record"
+                            aria-label="Permanently delete mortality record"
+                            className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-red-200 text-red-500 transition hover:bg-red-50 hover:text-red-700 disabled:cursor-not-allowed disabled:opacity-50 dark:border-red-900/40 dark:hover:bg-red-950/30"
+                          >
+                            {isDeleting ? (
+                              <Loader2 className="h-4 w-4 animate-spin" />
+                            ) : (
+                              <Trash2 className="h-4 w-4" />
+                            )}
+                          </button>
+                        </div>
+                      </TD>
+                    </TR>
+                  );
+                })}
+              </TBody>
+            </Table>
+          </div>
         ) : (
           <div className="py-14 text-center text-sm text-[var(--muted)]">
             No mortality records found.
@@ -526,12 +795,25 @@ export default function Mortality() {
         />
       </Card>
 
-      {/* CREATE DIALOG */}
+      {/* ======================================================
+          CREATE / EDIT DIALOG
+          ====================================================== */}
+
       <Dialog
         open={open}
-        onOpenChange={setOpen}
-        title="Record mortality"
-        description="Record the fish loss. Date, pond and quantity are required."
+        onOpenChange={(nextOpen) => {
+          if (!nextOpen) {
+            closeFormDialog();
+          } else {
+            setOpen(true);
+          }
+        }}
+        title={editingRecord ? "Edit mortality record" : "Record mortality"}
+        description={
+          editingRecord
+            ? "Update the mortality record. Changes will synchronize the pond fish count."
+            : "Record the fish loss. Date, pond and quantity are required."
+        }
       >
         <form
           onSubmit={handleSubmit(submit)}
@@ -645,9 +927,82 @@ export default function Mortality() {
             />
           </div>
 
-          {/* IMAGES */}
+          {/* ==================================================
+              EXISTING IMAGES — EDIT ONLY
+              ================================================== */}
+
+          {editingRecord && (
+            <div className="sm:col-span-2">
+              <Label>Current fish images</Label>
+
+              {(() => {
+                const existingImages = getImages(editingRecord);
+
+                if (!existingImages.length) {
+                  return (
+                    <p className="mt-2 text-sm text-[var(--muted)]">
+                      This mortality record has no existing images.
+                    </p>
+                  );
+                }
+
+                return (
+                  <>
+                    <div className="mt-3 flex flex-wrap gap-3">
+                      {existingImages.map((imageUrl, index) => (
+                        <button
+                          key={`${imageUrl}-${index}`}
+                          type="button"
+                          onClick={() => openGallery(existingImages, index)}
+                          className="group relative h-20 w-20 overflow-hidden rounded-xl border border-[var(--border)]"
+                        >
+                          <img
+                            src={imageUrl}
+                            alt={`Existing mortality image ${index + 1}`}
+                            className="h-full w-full object-cover transition group-hover:scale-105"
+                          />
+
+                          <span className="absolute inset-0 flex items-center justify-center bg-black/0 transition group-hover:bg-black/40">
+                            <ImageIcon className="h-5 w-5 text-white opacity-0 transition group-hover:opacity-100" />
+                          </span>
+                        </button>
+                      ))}
+                    </div>
+
+                    <label className="mt-3 flex cursor-pointer items-center gap-2 text-sm">
+                      <input
+                        type="checkbox"
+                        checked={removeExistingImages}
+                        onChange={(event) =>
+                          setRemoveExistingImages(event.target.checked)
+                        }
+                        className="h-4 w-4 rounded border-[var(--border)]"
+                      />
+
+                      <span className="text-red-600">
+                        Remove current images
+                      </span>
+                    </label>
+
+                    <p className="mt-1.5 text-xs text-[var(--muted)]">
+                      Uploading new images will replace the current images.
+                      Checking "Remove current images" clears them without
+                      uploading replacements.
+                    </p>
+                  </>
+                );
+              })()}
+            </div>
+          )}
+
+          {/* ==================================================
+              NEW IMAGES
+              ================================================== */}
+
           <div className="sm:col-span-2">
-            <Label htmlFor="mortality-image">Fish images</Label>
+            <Label htmlFor="mortality-image">
+              {editingRecord ? "Replace with new images" : "Fish images"}
+            </Label>
 
             <Input
               id="mortality-image"
@@ -731,25 +1086,41 @@ export default function Mortality() {
             )}
           </div>
 
-          {/* ACTIONS */}
+          {/* ==================================================
+              ACTIONS
+              ================================================== */}
+
           <div className="flex justify-end gap-2 sm:col-span-2">
             <Button
               type="button"
               variant="outline"
               disabled={submitting}
-              onClick={() => setOpen(false)}
+              onClick={closeFormDialog}
             >
               Cancel
             </Button>
 
             <Button type="submit" disabled={submitting}>
-              {submitting ? "Recording..." : "Record mortality"}
+              {submitting ? (
+                <>
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+
+                  {editingRecord ? "Updating..." : "Recording..."}
+                </>
+              ) : editingRecord ? (
+                "Save changes"
+              ) : (
+                "Record mortality"
+              )}
             </Button>
           </div>
         </form>
       </Dialog>
 
-      {/* IMAGE GALLERY VIEWER */}
+      {/* ======================================================
+          IMAGE GALLERY VIEWER
+          ====================================================== */}
+
       {gallery && gallery.length > 0 && (
         <div
           className="fixed inset-0 z-[100] flex items-center justify-center bg-black/80 p-4 backdrop-blur-sm"
@@ -759,6 +1130,7 @@ export default function Mortality() {
             className="relative flex max-h-[92vh] max-w-5xl items-center justify-center overflow-hidden rounded-2xl bg-black shadow-2xl"
             onClick={(event) => event.stopPropagation()}
           >
+            {/* CLOSE */}
             <button
               type="button"
               onClick={closeGallery}
@@ -768,6 +1140,7 @@ export default function Mortality() {
               <X className="h-5 w-5" />
             </button>
 
+            {/* PREVIOUS / NEXT */}
             {gallery.length > 1 && (
               <>
                 <button
@@ -796,7 +1169,9 @@ export default function Mortality() {
 
             <img
               src={gallery[galleryIndex]}
-              alt={`Mortality record image ${galleryIndex + 1} of ${gallery.length}`}
+              alt={`Mortality record image ${
+                galleryIndex + 1
+              } of ${gallery.length}`}
               className="max-h-[92vh] max-w-[90vw] object-contain"
             />
           </div>
