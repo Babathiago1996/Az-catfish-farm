@@ -48,4 +48,10 @@ router.patch(
   controller.updateGrowthRecord
 );
 
+router.delete(
+  "/:id",
+  growthIdValidators,
+  controller.deleteGrowthRecord
+);
+
 module.exports = router;

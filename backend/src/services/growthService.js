@@ -633,6 +633,79 @@ const updateGrowthRecord = async ({ id, data, ipAddress, userAgent }) => {
 };
 
 /**
+ * Permanently delete a growth record.
+ *
+ * This is a hard delete — the document is fully removed
+ * from MongoDB, there is no soft-delete flag on this model.
+ *
+ * Because removing a record from the middle of a pond's
+ * growth timeline changes which record is "previous" for
+ * everything that comes after it, this reuses the same
+ * recalculatePondGrowthRecords cascade that updateGrowthRecord
+ * already relies on, so growthRate/previousAverageWeight stay
+ * correct for every remaining record, and the pond's
+ * currentAverageWeight is re-synced to whatever the new
+ * latest record is (or reset to 0 if none remain).
+ */
+const deleteGrowthRecord = async ({ id, ipAddress, userAgent }) => {
+  if (!mongoose.isValidObjectId(id)) {
+    return {
+      success: false,
+      reason: "NOT_FOUND",
+    };
+  }
+
+  const record = await GrowthRecord.findById(id);
+
+  if (!record) {
+    return {
+      success: false,
+      reason: "NOT_FOUND",
+    };
+  }
+
+  const pondId = record.pond;
+
+  const deletedInfo = {
+    _id: record._id,
+    pond: record.pond,
+    date: record.date,
+    averageWeight: record.averageWeight,
+    sampleSize: record.sampleSize,
+  };
+
+  await GrowthRecord.deleteOne({ _id: record._id });
+
+  /*
+   * Recompute growthRate/previousAverageWeight for every
+   * record that comes after the deleted one, and resync
+   * the pond's currentAverageWeight to the new latest
+   * record (or 0 if the pond has no growth records left).
+   */
+  await recalculatePondGrowthRecords(pondId);
+
+  await ActivityLog.create({
+    action: "delete",
+    entityType: "GrowthRecord",
+    entityId: deletedInfo._id,
+    description: "Fish-growth record was permanently deleted.",
+    metadata: {
+      pondId: deletedInfo.pond,
+      date: deletedInfo.date,
+      averageWeight: deletedInfo.averageWeight,
+      sampleSize: deletedInfo.sampleSize,
+    },
+    ipAddress: ipAddress || "",
+    userAgent: userAgent || "",
+  });
+
+  return {
+    success: true,
+    record: deletedInfo,
+  };
+};
+
+/**
  * Get growth analytics.
  */
 const getGrowthAnalytics = async ({ pond, from, to, limit = 100 }) => {
@@ -724,6 +797,7 @@ module.exports = {
   listGrowthRecords,
   getGrowthRecordById,
   updateGrowthRecord,
+  deleteGrowthRecord,
   getGrowthAnalytics,
   calculateBiomass,
   calculateGrowthRate,

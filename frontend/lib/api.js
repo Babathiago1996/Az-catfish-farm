@@ -122,6 +122,8 @@ export const api = {
     create: (data) => post("/growth", data),
 
     update: (id, data) => patch(`/growth/${id}`, data),
+
+    remove: (id) => del(`/growth/${id}`),
   },
   mortality: {
     list: async (params = {}) => {

@@ -171,6 +171,32 @@ const updateGrowthRecord = asyncHandler(async (req, res) => {
   });
 });
 
+const deleteGrowthRecord = asyncHandler(async (req, res) => {
+  if (!validate(req, res)) {
+    return;
+  }
+
+  const result = await growthService.deleteGrowthRecord({
+    id: req.params.id,
+    ...getMetadata(req),
+  });
+
+  if (!result.success) {
+    return errorResponse(res, {
+      statusCode: 404,
+      message: "Growth record not found.",
+    });
+  }
+
+  return successResponse(res, {
+    statusCode: 200,
+    message: "Growth record permanently deleted.",
+    data: {
+      record: result.record,
+    },
+  });
+});
+
 const getGrowthAnalytics = asyncHandler(async (req, res) => {
   if (!validate(req, res)) {
     return;
@@ -195,5 +221,6 @@ module.exports = {
   listGrowthRecords,
   getGrowthRecord,
   updateGrowthRecord,
+  deleteGrowthRecord,
   getGrowthAnalytics,
 };
