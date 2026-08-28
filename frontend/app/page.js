@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { motion } from "framer-motion";
+import { motion, AnimatePresence } from "framer-motion";
 import {
   ArrowRight,
   Fish,
@@ -11,6 +11,10 @@ import {
   TrendingUp,
   Phone,
   MapPin,
+  Maximize2,
+  X,
+  ChevronLeft,
+  ChevronRight,
 } from "lucide-react";
 import { useEffect, useState } from "react";
 
@@ -31,8 +35,34 @@ const GOOGLE_MAPS_URL = `https://www.google.com/maps/search/?api=1&query=${encod
   FARM_ADDRESS,
 )}`;
 
+/*
+ * Shared scroll-reveal animation for sections below the
+ * fold. `viewport={{ once: true }}` means it only plays the
+ * first time each section scrolls into view, not every time
+ * you scroll past it — restrained rather than gimmicky.
+ */
+const revealUp = {
+  initial: { opacity: 0, y: 28 },
+  whileInView: { opacity: 1, y: 0 },
+  viewport: { once: true, margin: "-80px" },
+};
+
 export default function HomePage() {
   const [content, setContent] = useState(null);
+
+  /*
+   * Which featured-gallery image (by index) is open in the
+   * lightbox. null means the lightbox is closed.
+   */
+  const [lightboxIndex, setLightboxIndex] = useState(null);
+
+  /*
+   * Drives the slow "Ken Burns" zoom on the currently open
+   * lightbox image: starts at normal scale, then transitions
+   * up to a slight zoom over several seconds via a plain CSS
+   * transition, restarting on every image change.
+   */
+  const [kenBurns, setKenBurns] = useState(false);
 
   useEffect(() => {
     let mounted = true;
@@ -59,6 +89,58 @@ export default function HomePage() {
   const farm = content?.farm;
   const overview = content?.overview || {};
   const gallery = content?.featuredGallery || [];
+  const featuredGallery = gallery.slice(0, 4);
+
+  /*
+   * Restart the Ken Burns zoom every time the lightbox opens
+   * or moves to a different image.
+   */
+  useEffect(() => {
+    if (lightboxIndex === null) {
+      return;
+    }
+
+    setKenBurns(false);
+
+    const timer = setTimeout(() => setKenBurns(true), 60);
+
+    return () => clearTimeout(timer);
+  }, [lightboxIndex]);
+
+  const closeLightbox = () => setLightboxIndex(null);
+
+  const showPrevImage = () =>
+    setLightboxIndex((current) =>
+      current === null
+        ? null
+        : (current - 1 + featuredGallery.length) % featuredGallery.length,
+    );
+
+  const showNextImage = () =>
+    setLightboxIndex((current) =>
+      current === null ? null : (current + 1) % featuredGallery.length,
+    );
+
+  /*
+   * Keyboard navigation while the lightbox is open:
+   * Escape to close, arrow keys to move between images.
+   */
+  useEffect(() => {
+    if (lightboxIndex === null) {
+      return;
+    }
+
+    const handleKeyDown = (event) => {
+      if (event.key === "Escape") closeLightbox();
+      if (event.key === "ArrowLeft") showPrevImage();
+      if (event.key === "ArrowRight") showNextImage();
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+
+    return () => window.removeEventListener("keydown", handleKeyDown);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [lightboxIndex, featuredGallery.length]);
 
   const stats = [
     [Waves, "Active ponds", overview.totalActivePonds || 0],
@@ -223,7 +305,13 @@ export default function HomePage() {
 
       {/* FEATURES */}
       <section className="mx-auto max-w-7xl px-4 py-20 sm:px-6 lg:px-8">
-        <div className="max-w-2xl">
+        <motion.div
+          initial={revealUp.initial}
+          whileInView={revealUp.whileInView}
+          viewport={revealUp.viewport}
+          transition={{ duration: 0.6 }}
+          className="max-w-2xl"
+        >
           <div className="text-xs font-bold uppercase tracking-[.2em] text-blue-600">
             What makes the farm different
           </div>
@@ -237,12 +325,16 @@ export default function HomePage() {
             creates better visibility, cleaner decisions and a more dependable
             farming rhythm.
           </p>
-        </div>
+        </motion.div>
 
         <div className="mt-10 grid gap-5 md:grid-cols-3">
-          {features.map(([Icon, title, copy]) => (
+          {features.map(([Icon, title, copy], index) => (
             <motion.div
               key={title}
+              initial={revealUp.initial}
+              whileInView={revealUp.whileInView}
+              viewport={revealUp.viewport}
+              transition={{ duration: 0.5, delay: index * 0.1 }}
               whileHover={{ y: -5 }}
               className="rounded-3xl border border-[var(--border)] bg-[var(--card)] p-7 shadow-sm"
             >
@@ -261,7 +353,13 @@ export default function HomePage() {
       {/* GALLERY */}
       <section className="border-y border-[var(--border)] bg-[var(--card)]">
         <div className="mx-auto max-w-7xl px-4 py-20 sm:px-6 lg:px-8">
-          <div className="flex flex-col justify-between gap-5 md:flex-row md:items-end">
+          <motion.div
+            initial={revealUp.initial}
+            whileInView={revealUp.whileInView}
+            viewport={revealUp.viewport}
+            transition={{ duration: 0.6 }}
+            className="flex flex-col justify-between gap-5 md:flex-row md:items-end"
+          >
             <div>
               <div className="text-xs font-bold uppercase tracking-[.2em] text-blue-600">
                 From the farm
@@ -279,21 +377,40 @@ export default function HomePage() {
               View full gallery
               <ArrowRight className="h-4 w-4" />
             </Link>
-          </div>
+          </motion.div>
 
           <div className="mt-10 grid gap-5 sm:grid-cols-2 lg:grid-cols-4">
-            {gallery.slice(0, 4).map((item, index) => (
-              <motion.div
+            {featuredGallery.map((item, index) => (
+              <motion.button
                 key={item._id || index}
+                type="button"
+                onClick={() => setLightboxIndex(index)}
+                initial={revealUp.initial}
+                whileInView={revealUp.whileInView}
+                viewport={revealUp.viewport}
+                transition={{ duration: 0.5, delay: index * 0.08 }}
                 whileHover={{ y: -4 }}
-                className="group overflow-hidden rounded-3xl border border-[var(--border)] bg-[var(--background)]"
+                className="group block overflow-hidden rounded-3xl border border-[var(--border)] bg-[var(--background)] text-left"
               >
-                <div className="aspect-[4/3] overflow-hidden bg-slate-200">
+                <div className="relative aspect-[4/3] overflow-hidden bg-slate-200">
                   <img
                     src={item.imageUrl}
                     alt={item.title || "AZ Fish Farm"}
-                    className="h-full w-full object-cover transition duration-700 group-hover:scale-105"
+                    className="h-full w-full object-cover transition duration-700 ease-out group-hover:scale-110"
                   />
+
+                  {/*
+                   * Hover overlay signals the image is
+                   * clickable, matching the "view larger"
+                   * affordance pattern used in the admin
+                   * mortality gallery elsewhere in the app.
+                   */}
+                  <div className="absolute inset-0 flex items-center justify-center bg-black/0 opacity-0 transition duration-300 group-hover:bg-black/40 group-hover:opacity-100">
+                    <span className="flex items-center gap-2 rounded-full bg-white/15 px-4 py-2 text-xs font-bold text-white backdrop-blur">
+                      <Maximize2 className="h-3.5 w-3.5" />
+                      View
+                    </span>
+                  </div>
                 </div>
 
                 <div className="p-4">
@@ -303,14 +420,113 @@ export default function HomePage() {
 
                   <div className="mt-1 font-bold">{item.title}</div>
                 </div>
-              </motion.div>
+              </motion.button>
             ))}
           </div>
         </div>
       </section>
 
+      {/* GALLERY LIGHTBOX */}
+      <AnimatePresence>
+        {lightboxIndex !== null && featuredGallery[lightboxIndex] && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.25 }}
+            className="fixed inset-0 z-[100] flex items-center justify-center bg-black/90 p-4 backdrop-blur-md"
+            onClick={closeLightbox}
+          >
+            <button
+              type="button"
+              onClick={closeLightbox}
+              className="absolute right-5 top-5 z-20 rounded-full bg-white/10 p-2.5 text-white transition hover:bg-white/20"
+              aria-label="Close"
+            >
+              <X className="h-5 w-5" />
+            </button>
+
+            {featuredGallery.length > 1 && (
+              <>
+                <button
+                  type="button"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    showPrevImage();
+                  }}
+                  className="absolute left-4 top-1/2 z-20 -translate-y-1/2 rounded-full bg-white/10 p-2.5 text-white transition hover:bg-white/20 sm:left-8"
+                  aria-label="Previous image"
+                >
+                  <ChevronLeft className="h-6 w-6" />
+                </button>
+
+                <button
+                  type="button"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    showNextImage();
+                  }}
+                  className="absolute right-4 top-1/2 z-20 -translate-y-1/2 rounded-full bg-white/10 p-2.5 text-white transition hover:bg-white/20 sm:right-8"
+                  aria-label="Next image"
+                >
+                  <ChevronRight className="h-6 w-6" />
+                </button>
+              </>
+            )}
+
+            <motion.div
+              key={lightboxIndex}
+              initial={{ opacity: 0, scale: 0.94 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.97 }}
+              transition={{ duration: 0.35, ease: [0.16, 1, 0.3, 1] }}
+              className="relative max-h-[85vh] max-w-5xl overflow-hidden rounded-2xl shadow-2xl"
+              onClick={(event) => event.stopPropagation()}
+            >
+              {/*
+               * The slow zoom ("Ken Burns" effect) is a
+               * plain CSS transition: the image starts at
+               * normal scale, then `kenBurns` flips true a
+               * beat after mount, transitioning it up to a
+               * gentle zoom over several seconds for a
+               * cinematic, gallery-quality feel.
+               */}
+              <img
+                src={featuredGallery[lightboxIndex].imageUrl}
+                alt={featuredGallery[lightboxIndex].title || "AZ Fish Farm"}
+                className={`max-h-[85vh] w-full object-contain transition-transform duration-[9000ms] ease-out ${
+                  kenBurns ? "scale-110" : "scale-100"
+                }`}
+              />
+
+              <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/80 to-transparent p-6 pt-16">
+                <div className="text-xs font-semibold uppercase tracking-wide text-cyan-300">
+                  {featuredGallery[lightboxIndex].category}
+                </div>
+
+                <div className="mt-1 text-lg font-black text-white">
+                  {featuredGallery[lightboxIndex].title}
+                </div>
+              </div>
+            </motion.div>
+
+            {featuredGallery.length > 1 && (
+              <div className="absolute bottom-6 left-1/2 z-20 -translate-x-1/2 rounded-full bg-white/10 px-4 py-1.5 text-xs font-bold text-white backdrop-blur">
+                {lightboxIndex + 1} / {featuredGallery.length}
+              </div>
+            )}
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       {/* CTA */}
-      <section className="mx-auto max-w-7xl px-4 py-20 sm:px-6 lg:px-8">
+      <motion.section
+        initial={revealUp.initial}
+        whileInView={revealUp.whileInView}
+        viewport={revealUp.viewport}
+        transition={{ duration: 0.6 }}
+        className="mx-auto max-w-7xl px-4 py-20 sm:px-6 lg:px-8"
+      >
         <div className="overflow-hidden rounded-[2rem] bg-gradient-to-r from-blue-700 to-cyan-600 p-8 text-white shadow-xl sm:p-12">
           <div className="flex flex-col items-start justify-between gap-8 md:flex-row md:items-center">
             <div>
@@ -332,7 +548,7 @@ export default function HomePage() {
             </Link>
           </div>
         </div>
-      </section>
+      </motion.section>
     </PublicShell>
   );
 }
