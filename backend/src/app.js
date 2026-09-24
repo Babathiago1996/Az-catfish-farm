@@ -18,6 +18,8 @@ const mortalityRoutes = require("./routes/mortalityRoutes");
 const saleRoutes = require("./routes/saleRoutes");
 const expenseRoutes = require("./routes/expenseRoutes");
 const customerRoutes = require("./routes/customerRoutes");
+const auditRoutes = require("./routes/auditRoutes");
+
 const supplierRoutes = require("./routes/supplierRoutes");
 const reportRoutes = require("./routes/reportRoutes");
 const analyticsRoutes = require("./routes/analyticsRoutes");
@@ -150,6 +152,8 @@ app.use("/api/analytics", analyticsRoutes);
 app.use("/api/notifications", notificationRoutes);
 app.use("/api/gallery", galleryRoutes);
 app.use("/api/settings", settingsRoutes);
+app.use("/api/audit", auditRoutes);
+
 app.use("/api/dashboard", dashboardRoutes);
 app.use("/api/public", publicWebsiteRoutes);
 app.use("/api/daily-activities", dailyActivityRoutes);

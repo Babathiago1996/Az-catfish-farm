@@ -48,6 +48,14 @@ export const api = {
     production: (params) => get("/analytics/production", params),
   },
 
+  audit: {
+    overview: () => get("/audit/overview"),
+
+    years: () => get("/audit/years"),
+
+    year: (year) => get(`/audit/${year}`),
+  },
+
   reports: {
     all: (params) => get("/reports", params),
 

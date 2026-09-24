@@ -33,6 +33,7 @@ import {
   Images,
   UserCircle,
   Loader2,
+  ShieldCheck,
 } from "lucide-react";
 import { useTheme } from "next-themes";
 import { useAuth } from "@/providers/auth-provider";
@@ -59,6 +60,7 @@ const groups = [
   {
     title: "Business",
     items: [
+      ["Audit", "/audit", "ShieldCheck"],
       ["Sales", "/sales", "ReceiptText"],
       ["Expenses", "/expenses", "WalletCards"],
       ["Inventory", "/inventory", "Boxes"],
@@ -581,6 +583,7 @@ function iconFor(label) {
       "Water Management": Droplets,
       Growth: TrendingUp,
       Mortality: HeartPulse,
+      Audit: ShieldCheck,
       Sales: ReceiptText,
       Expenses: WalletCards,
       Inventory: Boxes,
