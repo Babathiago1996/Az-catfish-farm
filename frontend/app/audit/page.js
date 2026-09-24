@@ -12,6 +12,9 @@ import {
   Printer,
   Layers,
   Boxes,
+  ChevronDown,
+  Sprout,
+  PackagePlus,
 } from "lucide-react";
 
 import { AdminLayout } from "@/components/shared/admin-layout";
@@ -46,15 +49,19 @@ import {
  * STATUS PILL
  *
  * The backend returns a { code, label } status for every
- * audited year (e.g. still stocking & growing, harvest in
+ * audited year (still stocking & growing, harvest in
  * progress, or closed). This maps that status to a colour.
  * ============================================================
  */
 const STATUS_STYLES = {
-  IN_PROGRESS: "border-blue-200 bg-blue-50 text-blue-700 dark:border-blue-900 dark:bg-blue-950/40 dark:text-blue-300",
-  CLOSED: "border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-900 dark:bg-emerald-950/40 dark:text-emerald-300",
-  CLOSED_NO_SALES: "border-red-200 bg-red-50 text-red-700 dark:border-red-900 dark:bg-red-950/40 dark:text-red-300",
-  NO_ACTIVITY: "border-slate-200 bg-slate-100 text-slate-600 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-400",
+  IN_PROGRESS:
+    "border-blue-200 bg-blue-50 text-blue-700 dark:border-blue-900 dark:bg-blue-950/40 dark:text-blue-300",
+  CLOSED:
+    "border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-900 dark:bg-emerald-950/40 dark:text-emerald-300",
+  CLOSED_NO_SALES:
+    "border-red-200 bg-red-50 text-red-700 dark:border-red-900 dark:bg-red-950/40 dark:text-red-300",
+  NO_ACTIVITY:
+    "border-slate-200 bg-slate-100 text-slate-600 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-400",
 };
 
 function StatusPill({ status }) {
@@ -72,14 +79,8 @@ function StatusPill({ status }) {
   );
 }
 
-/*
- * ============================================================
- * PROFIT PILL
- *
- * A small helper to consistently colour a profit / loss
- * figure green or red across every card and table on the
- * page.
- * ============================================================
+/**
+ * Consistently colours a profit / loss figure green or red.
  */
 function ProfitValue({ value, className = "" }) {
   const isProfit = Number(value) >= 0;
@@ -99,6 +100,18 @@ function ProfitValue({ value, className = "" }) {
     </span>
   );
 }
+
+const COST_BUCKET_ICON = {
+  stocking: Sprout,
+  expenses: WalletCards,
+  inventory: PackagePlus,
+};
+
+const COST_BUCKET_COLOR = {
+  stocking: "bg-teal-600",
+  expenses: "bg-amber-500",
+  inventory: "bg-violet-600",
+};
 
 export default function Audit() {
   const [years, setYears] = useState([]);
@@ -186,7 +199,7 @@ export default function Audit() {
       <PageHeader
         eyebrow="Financial Audit"
         title="Farm Audit"
-        description="Every cost of stocking, feed and running the farm, weighed against every sale — so you always know what's been spent and what's been made."
+        description="Every naira spent — on stocking, on expenses, and on materials stocked into inventory — weighed against every naira earned from sales."
         secondary={
           <Button variant="outline" size="sm" onClick={() => window.print()}>
             <Printer className="h-4 w-4" />
@@ -261,7 +274,9 @@ export default function Audit() {
 
 /*
  * ============================================================
- * LIFETIME OVERVIEW
+ * LIFETIME OVERVIEW — only what a manager actually needs at
+ * a glance: total spent, total earned, net position, fish
+ * lost, a trend chart, and a lean year-by-year table.
  * ============================================================
  */
 function OverviewView({ overview, onSelectYear }) {
@@ -282,7 +297,7 @@ function OverviewView({ overview, onSelectYear }) {
         <MetricCard
           label="Total spent (lifetime)"
           value={formatCurrency(lifetime.totals.totalCostOfProduction)}
-          sub="Stocking + all expenses"
+          sub="Stocking + expenses + inventory"
           icon={WalletCards}
         />
 
@@ -352,9 +367,7 @@ function OverviewView({ overview, onSelectYear }) {
                 <THead>
                   <TR>
                     <TH>Year</TH>
-                    <TH>Stocking cost</TH>
-                    <TH>Expenses</TH>
-                    <TH>Fish lost</TH>
+                    <TH>Total spent</TH>
                     <TH>Revenue</TH>
                     <TH>Net profit / loss</TH>
                     <TH>Status</TH>
@@ -366,9 +379,7 @@ function OverviewView({ overview, onSelectYear }) {
                   {byYear.map((row) => (
                     <TR key={row.year}>
                       <TD className="font-black">{row.year}</TD>
-                      <TD>{formatCurrency(row.stockingCost)}</TD>
-                      <TD>{formatCurrency(row.expenses)}</TD>
-                      <TD>{formatNumber(row.mortalityQuantity)}</TD>
+                      <TD>{formatCurrency(row.totalCostOfProduction)}</TD>
                       <TD>{formatCurrency(row.revenue)}</TD>
                       <TD>
                         <ProfitValue value={row.netProfit} />
@@ -393,7 +404,7 @@ function OverviewView({ overview, onSelectYear }) {
               <div className="p-5">
                 <EmptyState
                   title="No audit history yet"
-                  description="Once stocking, expenses or sales are recorded, they'll appear here year by year."
+                  description="Once stocking, expenses, inventory or sales are recorded, they'll appear here year by year."
                 />
               </div>
             )}
@@ -410,11 +421,12 @@ function OverviewView({ overview, onSelectYear }) {
  * ============================================================
  */
 function YearView({ audit }) {
-  const { stocking, expenses, mortality, sales, totals, status, isCurrentYear } =
+  const { stocking, expenses, inventory, mortality, sales, totals, costBreakdown, status, isCurrentYear } =
     audit;
 
   return (
     <>
+      {/* STATUS BANNER */}
       <div className="mb-5 flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-[var(--border)] bg-[var(--card)] p-4">
         <div className="flex items-center gap-3">
           <div className="grid h-11 w-11 shrink-0 place-items-center rounded-xl bg-slate-950 text-white dark:bg-white dark:text-slate-950">
@@ -434,13 +446,12 @@ function YearView({ audit }) {
         <StatusPill status={status} />
       </div>
 
+      {/* HEADLINE KPIs — the only numbers that matter at a glance */}
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <MetricCard
           label="Total spent this year"
           value={formatCurrency(totals.totalCostOfProduction)}
-          sub={`Stocking ${formatCurrency(stocking.totalCost)} + expenses ${formatCurrency(
-            expenses.totalAmount,
-          )}`}
+          sub="Stocking + expenses + inventory"
           icon={WalletCards}
         />
 
@@ -472,6 +483,63 @@ function YearView({ audit }) {
         />
       </div>
 
+      {/* WHERE THE MONEY WENT — stocking vs expenses vs inventory,
+          the three real cost centres, side by side */}
+      <div className="mt-5">
+        <Card>
+          <CardHeader>
+            <CardTitle>Where the money went</CardTitle>
+          </CardHeader>
+
+          <CardContent>
+            {costBreakdown.length ? (
+              <div className="space-y-4">
+                {costBreakdown.map((row) => {
+                  const percent =
+                    totals.totalCostOfProduction > 0
+                      ? (row.amount / totals.totalCostOfProduction) * 100
+                      : 0;
+
+                  const Icon = COST_BUCKET_ICON[row.key] || WalletCards;
+
+                  return (
+                    <div key={row.key}>
+                      <div className="mb-1.5 flex items-center justify-between text-sm">
+                        <span className="flex items-center gap-2 font-semibold">
+                          <Icon className="h-4 w-4 text-[var(--muted)]" />
+                          {row.label}
+                        </span>
+                        <span className="font-black">
+                          {formatCurrency(row.amount)}
+                          <span className="ml-2 text-xs font-semibold text-[var(--muted)]">
+                            {formatNumber(percent, 0)}%
+                          </span>
+                        </span>
+                      </div>
+
+                      <div className="h-2.5 w-full overflow-hidden rounded-full bg-slate-100 dark:bg-slate-800">
+                        <div
+                          className={`h-full rounded-full ${
+                            COST_BUCKET_COLOR[row.key] || "bg-blue-600"
+                          }`}
+                          style={{ width: `${percent}%` }}
+                        />
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            ) : (
+              <EmptyState
+                title="Nothing spent yet"
+                description="Stocking cost, expenses and inventory purchases for this year will show up here."
+              />
+            )}
+          </CardContent>
+        </Card>
+      </div>
+
+      {/* SECONDARY OPERATIONAL METRICS */}
       <div className="mt-5 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <MetricCard
           label="Fingerlings stocked"
@@ -510,234 +578,259 @@ function YearView({ audit }) {
         />
       </div>
 
-      {/* ============================================================
-          EXPENSE BREAKDOWN
-          ============================================================ */}
-      <div className="mt-5">
-        <Card>
-          <CardHeader>
-            <CardTitle>Where the money went (expenses by category)</CardTitle>
-          </CardHeader>
-
-          <CardContent>
-            {expenses.byCategory.length ? (
-              <div className="space-y-3">
-                {expenses.byCategory.map((row) => {
-                  const percent =
-                    expenses.totalAmount > 0
-                      ? (row.amount / expenses.totalAmount) * 100
-                      : 0;
-
-                  return (
-                    <div key={row.category}>
-                      <div className="mb-1 flex items-center justify-between text-sm">
-                        <span className="font-semibold">
-                          {labelize(row.category)}
-                        </span>
-                        <span className="font-bold">
-                          {formatCurrency(row.amount)}
-                        </span>
-                      </div>
-
-                      <div className="h-2 w-full overflow-hidden rounded-full bg-slate-100 dark:bg-slate-800">
-                        <div
-                          className="h-full rounded-full bg-blue-600"
-                          style={{ width: `${percent}%` }}
-                        />
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            ) : (
-              <EmptyState
-                title="No expenses recorded"
-                description="Feed, medicine, fuel and other running costs for this year will show up here."
-              />
-            )}
-          </CardContent>
-        </Card>
-      </div>
-
-      {/* ============================================================
-          STOCKING LEDGER
-          ============================================================ */}
-      <LedgerCard
-        title="Stocking (fingerlings bought)"
-        icon={Fish}
-        emptyTitle="No stocking recorded this year"
-        emptyDescription="Fingerling purchases for this year will be listed here."
-        rows={stocking.items}
-        renderHead={() => (
-          <TR>
-            <TH>Date</TH>
-            <TH>Pond</TH>
-            <TH>Quantity</TH>
-            <TH>Size</TH>
-            <TH>Supplier</TH>
-            <TH>Cost</TH>
-          </TR>
-        )}
-        renderRow={(row) => (
-          <TR key={row._id}>
-            <TD>{formatDate(row.stockingDate)}</TD>
-            <TD>{pondName(row.pond)}</TD>
-            <TD>{formatNumber(row.fingerlingQuantity)}</TD>
-            <TD>
-              {formatNumber(row.fingerlingSize, 2)} {row.fingerlingSizeUnit}
-            </TD>
-            <TD>{row.supplier || "—"}</TD>
-            <TD className="font-bold">{formatCurrency(row.cost)}</TD>
-          </TR>
-        )}
-      />
-
-      {/* ============================================================
-          EXPENSE LEDGER
-          ============================================================ */}
-      <LedgerCard
-        title="Expenses"
-        icon={WalletCards}
-        emptyTitle="No expenses recorded this year"
-        emptyDescription="Every feed, medicine, fuel and other cost logged this year will be listed here."
-        rows={expenses.items}
-        renderHead={() => (
-          <TR>
-            <TH>Date</TH>
-            <TH>Category</TH>
-            <TH>Description</TH>
-            <TH>Vendor</TH>
-            <TH>Amount</TH>
-          </TR>
-        )}
-        renderRow={(row) => (
-          <TR key={row._id}>
-            <TD>{formatDate(row.expenseDate)}</TD>
-            <TD>{labelize(row.category)}</TD>
-            <TD className="max-w-xs truncate">{row.description}</TD>
-            <TD>{row.vendor || "—"}</TD>
-            <TD className="font-bold">{formatCurrency(row.amount)}</TD>
-          </TR>
-        )}
-      />
-
-      {/* ============================================================
-          MORTALITY LEDGER
-          ============================================================ */}
-      <LedgerCard
-        title="Mortality (fish lost)"
-        icon={HeartPulse}
-        emptyTitle="No mortality recorded this year"
-        emptyDescription="Fish losses logged this year, and their estimated value, will be listed here."
-        rows={mortality.items}
-        renderHead={() => (
-          <TR>
-            <TH>Date</TH>
-            <TH>Pond</TH>
-            <TH>Quantity lost</TH>
-            <TH>Cause</TH>
-            <TH>Est. value lost</TH>
-          </TR>
-        )}
-        renderRow={(row) => (
-          <TR key={row._id}>
-            <TD>{formatDate(row.date)}</TD>
-            <TD>{pondName(row.pond)}</TD>
-            <TD className="font-bold text-red-600">
-              {formatNumber(row.quantity)}
-            </TD>
-            <TD>{labelize(row.estimatedCause)}</TD>
-            <TD>
-              {formatCurrency(row.quantity * mortality.averageCostPerFishUsed)}
-            </TD>
-          </TR>
-        )}
-      />
-
-      {/* ============================================================
-          SALES LEDGER
-          ============================================================ */}
-      <LedgerCard
-        title="Sales (harvest income)"
-        icon={ReceiptText}
-        emptyTitle="No sales recorded this year"
-        emptyDescription="Every harvest sale logged this year — and how it reduces the year's net cost — will be listed here."
-        rows={sales.items}
-        renderHead={() => (
-          <TR>
-            <TH>Date</TH>
-            <TH>Invoice</TH>
-            <TH>Customer</TH>
-            <TH>Pond</TH>
-            <TH>Qty sold</TH>
-            <TH>Weight (kg)</TH>
-            <TH>Amount</TH>
-            <TH>Status</TH>
-          </TR>
-        )}
-        renderRow={(row) => (
-          <TR key={row._id}>
-            <TD>{formatDate(row.saleDate)}</TD>
-            <TD className="font-mono text-xs">{row.invoiceNumber}</TD>
-            <TD>{row.customerName}</TD>
-            <TD>{pondName(row.pond)}</TD>
-            <TD>{formatNumber(row.quantitySold)}</TD>
-            <TD>{formatNumber(row.totalWeight, 2)}</TD>
-            <TD className="font-bold text-emerald-600">
-              {formatCurrency(row.totalAmount)}
-            </TD>
-            <TD>{labelize(row.paymentStatus)}</TD>
-          </TR>
-        )}
+      {/* FULL LEDGER — every record behind every figure above,
+          tucked away behind a single drill-down so the page
+          opens clean and only shows this on request. */}
+      <DetailedLedger
+        stocking={stocking}
+        expenses={expenses}
+        inventory={inventory}
+        mortality={mortality}
+        sales={sales}
       />
     </>
   );
 }
 
-/**
- * A single reusable "ledger" card: a title, an icon, and a
- * scrollable table of the underlying records that make up
- * one of the totals above — so every figure on this page
- * can be traced back to the exact entries behind it.
+/*
+ * ============================================================
+ * DETAILED LEDGER (collapsed by default)
+ *
+ * One drill-down section with a tab per record type, instead
+ * of five permanently-open tables. Keeps the page focused on
+ * the numbers that matter, while every underlying record
+ * stays one click away for a real audit trail.
+ * ============================================================
  */
-function LedgerCard({
-  title,
-  icon: Icon,
-  rows,
-  renderHead,
-  renderRow,
-  emptyTitle,
-  emptyDescription,
-}) {
+function DetailedLedger({ stocking, expenses, inventory, mortality, sales }) {
+  const [open, setOpen] = useState(false);
+  const [tab, setTab] = useState("stocking");
+
+  const tabs = [
+    { key: "stocking", label: "Stocking", count: stocking.items?.length || 0 },
+    { key: "expenses", label: "Expenses", count: expenses.items?.length || 0 },
+    { key: "inventory", label: "Inventory", count: inventory.items?.length || 0 },
+    { key: "mortality", label: "Mortality", count: mortality.items?.length || 0 },
+    { key: "sales", label: "Sales", count: sales.items?.length || 0 },
+  ];
+
   return (
     <div className="mt-5">
       <Card>
-        <CardHeader className="flex flex-row items-center gap-2">
-          {Icon && <Icon className="h-4 w-4 text-[var(--muted)]" />}
-          <CardTitle>{title}</CardTitle>
+        <button
+          type="button"
+          onClick={() => setOpen((value) => !value)}
+          className="flex w-full items-center justify-between p-5 text-left"
+        >
+          <div>
+            <CardTitle>Detailed ledger</CardTitle>
+            <p className="mt-1 text-sm text-[var(--muted)]">
+              Every stocking, expense, inventory, mortality and sales record
+              behind the figures above.
+            </p>
+          </div>
 
-          {!!rows?.length && (
-            <span className="ml-auto text-xs font-semibold text-[var(--muted)]">
-              {rows.length} record{rows.length === 1 ? "" : "s"}
-            </span>
-          )}
-        </CardHeader>
+          <ChevronDown
+            className={`h-5 w-5 shrink-0 text-[var(--muted)] transition-transform ${
+              open ? "rotate-180" : ""
+            }`}
+          />
+        </button>
 
-        <CardContent className="p-0">
-          {rows?.length ? (
-            <div className="max-h-96 overflow-y-auto">
-              <Table>
-                <THead>{renderHead()}</THead>
-                <TBody>{rows.map(renderRow)}</TBody>
-              </Table>
+        {open && (
+          <CardContent className="pt-0">
+            <div className="mb-4 flex flex-wrap gap-2 border-t border-[var(--border)] pt-4">
+              {tabs.map((item) => (
+                <button
+                  key={item.key}
+                  type="button"
+                  onClick={() => setTab(item.key)}
+                  className={`rounded-lg px-3 py-1.5 text-xs font-bold transition ${
+                    tab === item.key
+                      ? "bg-slate-950 text-white dark:bg-white dark:text-slate-950"
+                      : "bg-slate-100 text-slate-600 hover:bg-slate-200 dark:bg-slate-900 dark:text-slate-300"
+                  }`}
+                >
+                  {item.label}
+                  <span className="ml-1.5 opacity-70">({item.count})</span>
+                </button>
+              ))}
             </div>
-          ) : (
-            <div className="p-5">
-              <EmptyState title={emptyTitle} description={emptyDescription} />
-            </div>
-          )}
-        </CardContent>
+
+            {tab === "stocking" && (
+              <LedgerTable
+                rows={stocking.items}
+                emptyTitle="No stocking recorded this year"
+                emptyDescription="Fingerling purchases for this year will be listed here."
+                head={
+                  <TR>
+                    <TH>Date</TH>
+                    <TH>Pond</TH>
+                    <TH>Quantity</TH>
+                    <TH>Size</TH>
+                    <TH>Supplier</TH>
+                    <TH>Cost</TH>
+                  </TR>
+                }
+                renderRow={(row) => (
+                  <TR key={row._id}>
+                    <TD>{formatDate(row.stockingDate)}</TD>
+                    <TD>{pondName(row.pond)}</TD>
+                    <TD>{formatNumber(row.fingerlingQuantity)}</TD>
+                    <TD>
+                      {formatNumber(row.fingerlingSize, 2)}{" "}
+                      {row.fingerlingSizeUnit}
+                    </TD>
+                    <TD>{row.supplier || "—"}</TD>
+                    <TD className="font-bold">{formatCurrency(row.cost)}</TD>
+                  </TR>
+                )}
+              />
+            )}
+
+            {tab === "expenses" && (
+              <LedgerTable
+                rows={expenses.items}
+                emptyTitle="No expenses recorded this year"
+                emptyDescription="Every feed, medicine, fuel and other cost logged this year will be listed here."
+                head={
+                  <TR>
+                    <TH>Date</TH>
+                    <TH>Category</TH>
+                    <TH>Description</TH>
+                    <TH>Vendor</TH>
+                    <TH>Amount</TH>
+                  </TR>
+                }
+                renderRow={(row) => (
+                  <TR key={row._id}>
+                    <TD>{formatDate(row.expenseDate)}</TD>
+                    <TD>{labelize(row.category)}</TD>
+                    <TD className="max-w-xs truncate">{row.description}</TD>
+                    <TD>{row.vendor || "—"}</TD>
+                    <TD className="font-bold">{formatCurrency(row.amount)}</TD>
+                  </TR>
+                )}
+              />
+            )}
+
+            {tab === "inventory" && (
+              <LedgerTable
+                rows={inventory.items}
+                emptyTitle="No inventory stocked in this year"
+                emptyDescription="Feed, medicine, nets, fuel and other materials brought into inventory this year will be listed here."
+                head={
+                  <TR>
+                    <TH>Date</TH>
+                    <TH>Item</TH>
+                    <TH>Category</TH>
+                    <TH>Quantity</TH>
+                    <TH>Unit cost</TH>
+                    <TH>Amount spent</TH>
+                  </TR>
+                }
+                renderRow={(row) => (
+                  <TR key={row._id}>
+                    <TD>{formatDate(row.transactionDate)}</TD>
+                    <TD>{row.inventoryItem?.name || "—"}</TD>
+                    <TD>{labelize(row.inventoryItem?.category)}</TD>
+                    <TD>
+                      {formatNumber(row.quantity)} {row.inventoryItem?.unit || ""}
+                    </TD>
+                    <TD>{formatCurrency(row.unitCost)}</TD>
+                    <TD className="font-bold">{formatCurrency(row.amount)}</TD>
+                  </TR>
+                )}
+              />
+            )}
+
+            {tab === "mortality" && (
+              <LedgerTable
+                rows={mortality.items}
+                emptyTitle="No mortality recorded this year"
+                emptyDescription="Fish losses logged this year, and their estimated value, will be listed here."
+                head={
+                  <TR>
+                    <TH>Date</TH>
+                    <TH>Pond</TH>
+                    <TH>Quantity lost</TH>
+                    <TH>Cause</TH>
+                    <TH>Est. value lost</TH>
+                  </TR>
+                }
+                renderRow={(row) => (
+                  <TR key={row._id}>
+                    <TD>{formatDate(row.date)}</TD>
+                    <TD>{pondName(row.pond)}</TD>
+                    <TD className="font-bold text-red-600">
+                      {formatNumber(row.quantity)}
+                    </TD>
+                    <TD>{labelize(row.estimatedCause)}</TD>
+                    <TD>
+                      {formatCurrency(
+                        row.quantity * mortality.averageCostPerFishUsed,
+                      )}
+                    </TD>
+                  </TR>
+                )}
+              />
+            )}
+
+            {tab === "sales" && (
+              <LedgerTable
+                rows={sales.items}
+                emptyTitle="No sales recorded this year"
+                emptyDescription="Every harvest sale logged this year will be listed here."
+                head={
+                  <TR>
+                    <TH>Date</TH>
+                    <TH>Invoice</TH>
+                    <TH>Customer</TH>
+                    <TH>Pond</TH>
+                    <TH>Qty sold</TH>
+                    <TH>Weight (kg)</TH>
+                    <TH>Amount</TH>
+                    <TH>Status</TH>
+                  </TR>
+                }
+                renderRow={(row) => (
+                  <TR key={row._id}>
+                    <TD>{formatDate(row.saleDate)}</TD>
+                    <TD className="font-mono text-xs">{row.invoiceNumber}</TD>
+                    <TD>{row.customerName}</TD>
+                    <TD>{pondName(row.pond)}</TD>
+                    <TD>{formatNumber(row.quantitySold)}</TD>
+                    <TD>{formatNumber(row.totalWeight, 2)}</TD>
+                    <TD className="font-bold text-emerald-600">
+                      {formatCurrency(row.totalAmount)}
+                    </TD>
+                    <TD>{labelize(row.paymentStatus)}</TD>
+                  </TR>
+                )}
+              />
+            )}
+          </CardContent>
+        )}
       </Card>
+    </div>
+  );
+}
+
+/**
+ * A single scrollable ledger table, or an empty state when
+ * there are no records of that type for the selected year.
+ */
+function LedgerTable({ rows, head, renderRow, emptyTitle, emptyDescription }) {
+  if (!rows?.length) {
+    return <EmptyState title={emptyTitle} description={emptyDescription} />;
+  }
+
+  return (
+    <div className="max-h-96 overflow-y-auto">
+      <Table>
+        <THead>{head}</THead>
+        <TBody>{rows.map(renderRow)}</TBody>
+      </Table>
     </div>
   );
 }
