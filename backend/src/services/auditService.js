@@ -4,8 +4,39 @@ const Stocking = require("../models/Stocking");
 const Expense = require("../models/Expense");
 const Mortality = require("../models/Mortality");
 const Sale = require("../models/Sale");
+const InventoryTransaction = require("../models/InventoryTransaction");
 
 const LAGOS_TIMEZONE = "Africa/Lagos";
+
+/*
+ * ============================================================
+ * WHERE THE FARM'S MONEY ACTUALLY LEAVES THE BUSINESS
+ *
+ * This project has THREE independent places where a real
+ * cash outflow gets recorded:
+ *
+ *   1. Stocking      -> Stocking.cost
+ *      (buying fingerlings to put in a pond)
+ *
+ *   2. Expenses       -> Expense.amount
+ *      (feed, fuel, medicine, repairs, transport, utilities,
+ *      logged directly from the Expenses menu)
+ *
+ *   3. Inventory stock-in -> InventoryTransaction
+ *      (quantity * unitCost, where transactionType === "stock_in")
+ *      (feed, salt, medicine, nets, buckets, pipes, fuel,
+ *      equipment... logged from the Inventory menu when
+ *      stock is brought IN)
+ *
+ * An earlier version of this audit only looked at (1) and
+ * (2), which understated total spend on any farm that logs
+ * its material purchases through the Inventory "Stock In"
+ * action instead of (or as well as) the Expenses menu. A
+ * real audit has to add up EVERY outflow, wherever it was
+ * recorded, so this file treats all three as first-class,
+ * equally-weighted cost centres.
+ * ============================================================
+ */
 
 /*
  * ============================================================
@@ -46,8 +77,8 @@ const getCurrentLagosYear = () => getLagosYear(new Date());
 /**
  * Return the { from, to } instant range (as real UTC
  * Date objects) that corresponds to a full Lagos
- * calendar year. Passing no year returns undefined
- * bounds, meaning "all time".
+ * calendar year. Passing no year returns null bounds,
+ * meaning "all time".
  */
 const getYearRange = (year) => {
   if (!year) {
@@ -96,10 +127,10 @@ const buildDateMatch = (field, from, to) => {
  * DISTINCT YEARS
  *
  * Looks across every farm ledger (stocking, expenses,
- * sales, mortality) to build the list of years the
- * "Audit" screen should let the user page through.
- * The current year is always included, even when it
- * has no records yet, so a brand new farm still has
+ * inventory stock-in, sales, mortality) to build the list
+ * of years the "Audit" screen should let the user page
+ * through. The current year is always included, even when
+ * it has no records yet, so a brand new farm still has
  * somewhere to see "money spent so far".
  * ============================================================
  */
@@ -111,22 +142,30 @@ const getAuditYears = async () => {
     },
   });
 
-  const [stockingYears, expenseYears, saleYears, mortalityYears] =
-    await Promise.all([
-      Stocking.aggregate([
-        { $group: { _id: yearOf("$stockingDate") } },
-      ]),
+  const [
+    stockingYears,
+    expenseYears,
+    inventoryYears,
+    saleYears,
+    mortalityYears,
+  ] = await Promise.all([
+    Stocking.aggregate([{ $group: { _id: yearOf("$stockingDate") } }]),
 
-      Expense.aggregate([{ $group: { _id: yearOf("$expenseDate") } }]),
+    Expense.aggregate([{ $group: { _id: yearOf("$expenseDate") } }]),
 
-      Sale.aggregate([{ $group: { _id: yearOf("$saleDate") } }]),
+    InventoryTransaction.aggregate([
+      { $match: { transactionType: "stock_in" } },
+      { $group: { _id: yearOf("$transactionDate") } },
+    ]),
 
-      Mortality.aggregate([{ $group: { _id: yearOf("$date") } }]),
-    ]);
+    Sale.aggregate([{ $group: { _id: yearOf("$saleDate") } }]),
+
+    Mortality.aggregate([{ $group: { _id: yearOf("$date") } }]),
+  ]);
 
   const years = new Set([getCurrentLagosYear()]);
 
-  [stockingYears, expenseYears, saleYears, mortalityYears].forEach(
+  [stockingYears, expenseYears, inventoryYears, saleYears, mortalityYears].forEach(
     (result) => {
       result.forEach((item) => {
         if (Number.isInteger(item._id)) {
@@ -189,10 +228,26 @@ const computePeriodFinancials = async ({
     paymentStatus: { $ne: "cancelled" },
   };
 
+  /*
+   * Only "stock_in" movements represent money actually
+   * leaving the business to bring material INTO the farm.
+   * "stock_out" (feed used), "adjustment", "return",
+   * "damaged" and "expired" are stock-level corrections,
+   * not new spend, so they are deliberately excluded here.
+   */
+  const inventoryMatch = {
+    ...buildDateMatch("transactionDate", from, to),
+    transactionType: "stock_in",
+  };
+
+  const inventoryValueExpr = { $multiply: ["$quantity", "$unitCost"] };
+
   const [
     stockingAgg,
     expenseTotalsAgg,
     expenseByCategoryAgg,
+    inventoryTotalsAgg,
+    inventoryByCategoryAgg,
     mortalityAgg,
     mortalityByCauseAgg,
     saleAgg,
@@ -237,6 +292,49 @@ const computePeriodFinancials = async ({
           _id: 0,
           category: "$_id",
           amount: 1,
+          count: 1,
+        },
+      },
+    ]),
+
+    InventoryTransaction.aggregate([
+      { $match: inventoryMatch },
+      {
+        $group: {
+          _id: null,
+          totalValue: { $sum: inventoryValueExpr },
+          totalQuantity: { $sum: "$quantity" },
+          records: { $sum: 1 },
+        },
+      },
+    ]),
+
+    InventoryTransaction.aggregate([
+      { $match: inventoryMatch },
+      {
+        $lookup: {
+          from: "inventories",
+          localField: "inventoryItem",
+          foreignField: "_id",
+          as: "item",
+        },
+      },
+      { $unwind: { path: "$item", preserveNullAndEmptyArrays: true } },
+      {
+        $group: {
+          _id: { $ifNull: ["$item.category", "other"] },
+          amount: { $sum: inventoryValueExpr },
+          quantity: { $sum: "$quantity" },
+          count: { $sum: 1 },
+        },
+      },
+      { $sort: { amount: -1 } },
+      {
+        $project: {
+          _id: 0,
+          category: "$_id",
+          amount: 1,
+          quantity: 1,
           count: 1,
         },
       },
@@ -316,6 +414,10 @@ const computePeriodFinancials = async ({
   const totalExpenses = roundMoney(expenseTotalsAgg[0]?.totalExpenses || 0);
   const expenseCount = expenseTotalsAgg[0]?.expenseCount || 0;
 
+  const inventoryValue = roundMoney(inventoryTotalsAgg[0]?.totalValue || 0);
+  const inventoryQuantity = inventoryTotalsAgg[0]?.totalQuantity || 0;
+  const inventoryRecords = inventoryTotalsAgg[0]?.records || 0;
+
   const mortalityQuantity = mortalityAgg[0]?.totalQuantity || 0;
   const mortalityRecords = mortalityAgg[0]?.records || 0;
 
@@ -335,7 +437,17 @@ const computePeriodFinancials = async ({
   const totalWeightKg = roundNumber(saleAgg[0]?.totalWeightKg || 0, 3);
   const salesCount = saleAgg[0]?.salesCount || 0;
 
-  const totalCostOfProduction = roundMoney(stockingCost + totalExpenses);
+  /*
+   * TOTAL COST OF PRODUCTION
+   *
+   * Every naira the farm actually paid out, regardless of
+   * which menu it was recorded from:
+   *
+   *   Stocking (fingerlings) + Expenses + Inventory stock-in
+   */
+  const totalCostOfProduction = roundMoney(
+    stockingCost + totalExpenses + inventoryValue,
+  );
 
   const netProfit = roundMoney(totalRevenue - totalCostOfProduction);
 
@@ -344,9 +456,7 @@ const computePeriodFinancials = async ({
   );
 
   const profitMarginPercent =
-    totalRevenue > 0
-      ? roundNumber((netProfit / totalRevenue) * 100)
-      : null;
+    totalRevenue > 0 ? roundNumber((netProfit / totalRevenue) * 100) : null;
 
   const costPerFishStocked =
     stockingQuantity > 0
@@ -369,6 +479,31 @@ const computePeriodFinancials = async ({
         )
       : null;
 
+  /*
+   * A single, top-level "where did the money go" summary —
+   * the three real cost centres, side by side. This is what
+   * the audit screen leads with; the category-level detail
+   * inside Expenses / Inventory stays one level down so the
+   * headline view isn't cluttered.
+   */
+  const costBreakdown = [
+    {
+      key: "stocking",
+      label: "Stocking (fingerlings)",
+      amount: stockingCost,
+    },
+    {
+      key: "expenses",
+      label: "Farm expenses",
+      amount: totalExpenses,
+    },
+    {
+      key: "inventory",
+      label: "Inventory / materials stocked in",
+      amount: inventoryValue,
+    },
+  ].filter((row) => row.amount > 0 || totalCostOfProduction === 0);
+
   const result = {
     stocking: {
       totalCost: stockingCost,
@@ -380,6 +515,16 @@ const computePeriodFinancials = async ({
       totalAmount: totalExpenses,
       count: expenseCount,
       byCategory: expenseByCategoryAgg.map((item) => ({
+        ...item,
+        amount: roundMoney(item.amount),
+      })),
+    },
+
+    inventory: {
+      totalValue: inventoryValue,
+      totalQuantity: inventoryQuantity,
+      records: inventoryRecords,
+      byCategory: inventoryByCategoryAgg.map((item) => ({
         ...item,
         amount: roundMoney(item.amount),
       })),
@@ -407,6 +552,8 @@ const computePeriodFinancials = async ({
       })),
     },
 
+    costBreakdown,
+
     totals: {
       totalCostOfProduction,
       totalRevenue,
@@ -422,7 +569,7 @@ const computePeriodFinancials = async ({
   };
 
   if (includeItems) {
-    const [stockingItems, expenseItems, mortalityItems, saleItems] =
+    const [stockingItems, expenseItems, inventoryItems, mortalityItems, saleItems] =
       await Promise.all([
         Stocking.find(stockingMatch)
           .sort({ stockingDate: -1 })
@@ -435,6 +582,12 @@ const computePeriodFinancials = async ({
         Expense.find(expenseMatch)
           .sort({ expenseDate: -1 })
           .select("expenseDate category description amount vendor reference")
+          .lean(),
+
+        InventoryTransaction.find(inventoryMatch)
+          .sort({ transactionDate: -1 })
+          .populate("inventoryItem", "name category unit")
+          .select("transactionDate inventoryItem quantity unitCost referenceType notes")
           .lean(),
 
         Mortality.find(mortalityMatch)
@@ -454,6 +607,12 @@ const computePeriodFinancials = async ({
 
     result.stocking.items = stockingItems;
     result.expenses.items = expenseItems;
+
+    result.inventory.items = inventoryItems.map((item) => ({
+      ...item,
+      amount: roundMoney((item.quantity || 0) * (item.unitCost || 0)),
+    }));
+
     result.mortality.items = mortalityItems;
     result.sales.items = saleItems;
   }
@@ -465,10 +624,10 @@ const computePeriodFinancials = async ({
  * Work out a human, farm-manager-friendly status label
  * for a given audited year.
  */
-const getAuditStatus = ({ year, totals, stocking, sales }) => {
+const getAuditStatus = ({ year, totals, sales }) => {
   const currentYear = getCurrentLagosYear();
 
-  const hasSpending = stocking.totalCost > 0 || totals.totalCostOfProduction > 0;
+  const hasSpending = totals.totalCostOfProduction > 0;
 
   const hasSales = sales.salesCount > 0;
 
@@ -537,7 +696,6 @@ const getYearlyAudit = async (year) => {
   const status = getAuditStatus({
     year: numericYear,
     totals: financials.totals,
-    stocking: financials.stocking,
     sales: financials.sales,
   });
 
@@ -568,7 +726,6 @@ const getYearSummary = async (year) => {
   const status = getAuditStatus({
     year,
     totals: financials.totals,
-    stocking: financials.stocking,
     sales: financials.sales,
   });
 
@@ -577,6 +734,7 @@ const getYearSummary = async (year) => {
     status,
     stockingCost: financials.stocking.totalCost,
     expenses: financials.expenses.totalAmount,
+    inventoryValue: financials.inventory.totalValue,
     mortalityQuantity: financials.mortality.totalQuantity,
     mortalityEstimatedValue: financials.mortality.estimatedValue,
     revenue: financials.sales.totalRevenue,
