@@ -264,7 +264,6 @@ const computePeriodFinancials = async ({
     transactionType: "stock_in",
   };
 
-
   const [
     stockingAgg,
     expenseTotalsAgg,
@@ -665,10 +664,10 @@ const computePeriodFinancials = async ({
 
       InventoryTransaction.find(inventoryMatch)
         .sort({ transactionDate: -1 })
-                .populate({
+        .populate({
           path: "inventoryItem",
           match: { isActive: true },
-          select: "name category unit isActive",
+          select: "name category unitCost isActive",
         })
         .select(
           "transactionDate inventoryItem quantity unitCost referenceType notes",
@@ -701,16 +700,33 @@ const computePeriodFinancials = async ({
      * joins already applied to the totals above.
      */
     result.inventory.items = inventoryItems
-      .filter((item) => item.inventoryItem?.isActive === true)
+      .filter(
+        (item) => item.inventoryItem && item.inventoryItem.isActive === true,
+      )
       .map((item) => {
-        // Audit uses the item's current unit cost, not the stale cost
-        // captured when the original transaction was created.
-        const currentUnitCost = Number(item.inventoryItem?.unitCost || 0);
+        /*
+         * IMPORTANT:
+         * The audit ledger must always use the CURRENT inventory
+         * item's unitCost.
+         *
+         * We intentionally do NOT use the historical transaction
+         * unitCost here because the audit represents the current
+         * audited value of the inventory record.
+         */
+        const currentUnitCost = Number(
+          item.inventoryItem.unitCost ?? item.unitCost ?? 0,
+        );
+
+        const quantity = Number(item.quantity || 0);
 
         return {
           ...item,
+
+          // Current inventory cost shown in the audit ledger.
           unitCost: currentUnitCost,
-          amount: roundMoney((item.quantity || 0) * currentUnitCost),
+
+          // Current audited amount for this stock-in record.
+          amount: roundMoney(quantity * currentUnitCost),
         };
       });
 
