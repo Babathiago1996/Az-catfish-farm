@@ -155,6 +155,26 @@ const getAuditYears = async () => {
 
     InventoryTransaction.aggregate([
       { $match: { transactionType: "stock_in" } },
+      {
+        $lookup: {
+          from: "inventories",
+          let: { inventoryId: "$inventoryItem" },
+          pipeline: [
+            {
+              $match: {
+                $expr: {
+                  $and: [
+                    { $eq: ["$_id", "$$inventoryId"] },
+                    { $eq: ["$isActive", true] },
+                  ],
+                },
+              },
+            },
+          ],
+          as: "item",
+        },
+      },
+      { $match: { item: { $ne: [] } } },
       { $group: { _id: yearOf("$transactionDate") } },
     ]),
 
@@ -320,8 +340,21 @@ const computePeriodFinancials = async ({
       {
         $lookup: {
           from: "inventories",
-          localField: "inventoryItem",
-          foreignField: "_id",
+          let: {
+            inventoryId: "$inventoryItem",
+          },
+          pipeline: [
+            {
+              $match: {
+                $expr: {
+                  $and: [
+                    { $eq: ["$_id", "$$inventoryId"] },
+                    { $eq: ["$isActive", true] },
+                  ],
+                },
+              },
+            },
+          ],
           as: "item",
         },
       },
@@ -341,8 +374,21 @@ const computePeriodFinancials = async ({
       {
         $lookup: {
           from: "inventories",
-          localField: "inventoryItem",
-          foreignField: "_id",
+          let: {
+            inventoryId: "$inventoryItem",
+          },
+          pipeline: [
+            {
+              $match: {
+                $expr: {
+                  $and: [
+                    { $eq: ["$_id", "$$inventoryId"] },
+                    { $eq: ["$isActive", true] },
+                  ],
+                },
+              },
+            },
+          ],
           as: "item",
         },
       },
@@ -616,7 +662,11 @@ const computePeriodFinancials = async ({
 
       InventoryTransaction.find(inventoryMatch)
         .sort({ transactionDate: -1 })
-        .populate("inventoryItem", "name category unit")
+                .populate({
+          path: "inventoryItem",
+          match: { isActive: true },
+          select: "name category unit isActive",
+        })
         .select(
           "transactionDate inventoryItem quantity unitCost referenceType notes",
         )
@@ -648,7 +698,7 @@ const computePeriodFinancials = async ({
      * joins already applied to the totals above.
      */
     result.inventory.items = inventoryItems
-      .filter((item) => item.inventoryItem)
+      .filter((item) => item.inventoryItem?.isActive === true)
       .map((item) => ({
         ...item,
         amount: roundMoney((item.quantity || 0) * (item.unitCost || 0)),

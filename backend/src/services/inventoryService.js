@@ -252,8 +252,12 @@ class InventoryService {
       supplier: normalizeOptionalString(payload.supplier),
       storageLocation: normalizeOptionalString(payload.storageLocation),
       lastRestockedAt: quantity > 0 ? new Date() : null,
-      isActive:
-        payload.isActive !== undefined ? Boolean(payload.isActive) : true,
+      /*
+       * Inventory deletion is permanent. `isActive` is retained only
+       * for compatibility with legacy records; new records are always
+       * live and cannot be created as soft-deleted items.
+       */
+      isActive: true,
       notes: normalizeOptionalString(payload.notes),
     });
 
@@ -389,7 +393,16 @@ class InventoryService {
   async getById(id) {
     validateObjectId(id);
 
-    const item = await Inventory.findById(id);
+    /*
+     * Normal inventory operations only work with live items.
+     * Legacy soft-deleted records from older versions may still
+     * exist in MongoDB, but they must never be treated as current
+     * inventory.
+     */
+    const item = await Inventory.findOne({
+      _id: id,
+      isActive: true,
+    });
 
     if (!item) {
       throw new Error("Inventory item not found.");
@@ -418,7 +431,6 @@ class InventoryService {
       "unitCost",
       "supplier",
       "storageLocation",
-      "isActive",
       "notes",
     ];
 
@@ -445,6 +457,7 @@ class InventoryService {
           $regex: `^${escapeRegex(updates.name)}$`,
           $options: "i",
         },
+        isActive: true,
       });
 
       if (duplicate) {
@@ -951,8 +964,21 @@ class InventoryService {
       {
         $lookup: {
           from: "inventories",
-          localField: "inventoryItem",
-          foreignField: "_id",
+          let: {
+            inventoryId: "$inventoryItem",
+          },
+          pipeline: [
+            {
+              $match: {
+                $expr: {
+                  $and: [
+                    { $eq: ["$_id", "$$inventoryId"] },
+                    { $eq: ["$isActive", true] },
+                  ],
+                },
+              },
+            },
+          ],
           as: "item",
         },
       },
