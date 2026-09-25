@@ -16,14 +16,19 @@ const roundWeight = (value) => {
 };
 
 const getInventoryOverview = async () => {
+  /*
+   * isActive: true guards against any legacy inventory
+   * document left over from before deletes were made
+   * permanent (see inventoryService.deleteItem). A
+   * genuinely deleted item must never surface here.
+   */
   const items = await Inventory.find({
+    isActive: true,
     reorderLevel: {
       $gt: 0,
     },
   })
-    .select(
-      "name category quantity unit reorderLevel unitCost lastRestockedAt",
-    )
+    .select("name category quantity unit reorderLevel unitCost lastRestockedAt")
     .sort({
       category: 1,
       name: 1,
@@ -32,8 +37,7 @@ const getInventoryOverview = async () => {
 
   const lowStockItems = items.filter((item) => {
     const quantity = Number(item.quantity) || 0;
-    const reorderLevel =
-      Number(item.reorderLevel) || 0;
+    const reorderLevel = Number(item.reorderLevel) || 0;
 
     return quantity <= reorderLevel;
   });
@@ -42,99 +46,69 @@ const getInventoryOverview = async () => {
     return (Number(item.quantity) || 0) <= 0;
   });
 
-  const totalInventoryItems =
-    await Inventory.countDocuments();
+  const totalInventoryItems = await Inventory.countDocuments({
+    isActive: true,
+  });
 
   return {
     totalItems: totalInventoryItems,
 
-    lowStockCount:
-      lowStockItems.length,
+    lowStockCount: lowStockItems.length,
 
-    outOfStockCount:
-      outOfStockItems.length,
+    outOfStockCount: outOfStockItems.length,
 
-    lowStockItems:
-      lowStockItems.map((item) => ({
-        _id: item._id,
-        name: item.name,
-        category: item.category,
-        quantity:
-          Number(item.quantity) || 0,
-        unit: item.unit,
-        reorderLevel:
-          Number(item.reorderLevel) || 0,
-        unitCost:
-          roundMoney(item.unitCost),
-        lastRestockedAt:
-          item.lastRestockedAt || null,
-      })),
+    lowStockItems: lowStockItems.map((item) => ({
+      _id: item._id,
+      name: item.name,
+      category: item.category,
+      quantity: Number(item.quantity) || 0,
+      unit: item.unit,
+      reorderLevel: Number(item.reorderLevel) || 0,
+      unitCost: roundMoney(item.unitCost),
+      lastRestockedAt: item.lastRestockedAt || null,
+    })),
   };
 };
 
-const getRecentActivities = async ({
-  limit = 10,
-} = {}) => {
-  const safeLimit = Math.min(
-    Math.max(Number(limit) || 10, 1),
-    50,
-  );
+const getRecentActivities = async ({ limit = 10 } = {}) => {
+  const safeLimit = Math.min(Math.max(Number(limit) || 10, 1), 50);
 
-  const activities =
-    await ActivityLog.find({})
-      .sort({
-        createdAt: -1,
-      })
-      .limit(safeLimit)
-      .select(
-        "action entityType entityId description metadata ipAddress userAgent createdAt",
-      )
-      .lean();
+  const activities = await ActivityLog.find({})
+    .sort({
+      createdAt: -1,
+    })
+    .limit(safeLimit)
+    .select(
+      "action entityType entityId description metadata ipAddress userAgent createdAt",
+    )
+    .lean();
 
   return activities.map((activity) => ({
     _id: activity._id,
 
-    action:
-      activity.action || "",
+    action: activity.action || "",
 
-    entityType:
-      activity.entityType || "",
+    entityType: activity.entityType || "",
 
-    entityId:
-      activity.entityId || null,
+    entityId: activity.entityId || null,
 
-    description:
-      activity.description || "",
+    description: activity.description || "",
 
-    metadata:
-      activity.metadata || {},
+    metadata: activity.metadata || {},
 
-    createdAt:
-      activity.createdAt || null,
+    createdAt: activity.createdAt || null,
   }));
 };
 
-const getDashboard = async ({
-  from,
-  to,
-  pond,
-  activityLimit = 10,
-} = {}) => {
-  if (
-    pond &&
-    !mongoose.isValidObjectId(pond)
-  ) {
+const getDashboard = async ({ from, to, pond, activityLimit = 10 } = {}) => {
+  if (pond && !mongoose.isValidObjectId(pond)) {
     return {
       success: false,
       reason: "INVALID_POND_ID",
     };
   }
 
-  const [
-    report,
-    inventory,
-    recentActivities,
-  ] = await Promise.all([
+  const [report, inventory, recentActivities] = await Promise.all([
     reportService.getReport({
       from,
       to,
@@ -148,278 +122,163 @@ const getDashboard = async ({
     }),
   ]);
 
-  const financial =
-    report.financial || {};
+  const financial = report.financial || {};
 
-  const sales =
-    report.sales || {};
+  const sales = report.sales || {};
 
-  const expenses =
-    report.expenses || {};
+  const expenses = report.expenses || {};
 
-  const production =
-    report.production || {};
+  const production = report.production || {};
 
-  const pondOverview =
-    production.ponds || {};
+  const pondOverview = production.ponds || {};
 
-  const stocking =
-    production.stocking || {};
+  const stocking = production.stocking || {};
 
-  const mortality =
-    production.mortality || {};
+  const mortality = production.mortality || {};
 
-  const survival =
-    production.survival || {};
+  const survival = production.survival || {};
 
-  const growth =
-    production.growth || {};
+  const growth = production.growth || {};
 
-  const salesTotals =
-    sales.totals || {};
+  const salesTotals = sales.totals || {};
 
   return {
-    generatedAt:
-      report.generatedAt ||
-      new Date(),
+    generatedAt: report.generatedAt || new Date(),
 
-    timeZone:
-      report.timeZone ||
-      DASHBOARD_TIME_ZONE,
+    timeZone: report.timeZone || DASHBOARD_TIME_ZONE,
 
-    period:
-      report.period || {
-        from: from || null,
-        to: to || null,
-      },
+    period: report.period || {
+      from: from || null,
+      to: to || null,
+    },
 
-    filters:
-      report.filters || {
-        pond: pond || null,
-      },
+    filters: report.filters || {
+      pond: pond || null,
+    },
 
     overview: {
       ponds: {
-        total:
-          pondOverview.totalPonds || 0,
+        total: pondOverview.totalPonds || 0,
 
-        active:
-          pondOverview.activePonds || 0,
+        active: pondOverview.activePonds || 0,
 
-        inactive:
-          pondOverview.inactivePonds || 0,
+        inactive: pondOverview.inactivePonds || 0,
       },
 
       fish: {
-        currentCount:
-          pondOverview.totalFishCount || 0,
+        currentCount: pondOverview.totalFishCount || 0,
 
-        biomassKg:
-          roundWeight(
-            pondOverview.totalBiomassKg,
-          ),
+        biomassKg: roundWeight(pondOverview.totalBiomassKg),
 
-        stocked:
-          stocking.totalStocked || 0,
+        stocked: stocking.totalStocked || 0,
 
-        mortality:
-          mortality.totalMortality || 0,
+        mortality: mortality.totalMortality || 0,
 
-        estimatedSurviving:
-          survival.estimatedSurvivingFish ||
-          0,
+        estimatedSurviving: survival.estimatedSurvivingFish || 0,
 
-        survivalRate:
-          Number(
-            survival.survivalRate || 0,
-          ),
+        survivalRate: Number(survival.survivalRate || 0),
       },
 
       financial: {
-        revenue:
-          roundMoney(
-            financial.revenue,
-          ),
+        revenue: roundMoney(financial.revenue),
 
-        collected:
-          roundMoney(
-            financial.collected,
-          ),
+        collected: roundMoney(financial.collected),
 
-        outstanding:
-          roundMoney(
-            financial.outstanding,
-          ),
+        outstanding: roundMoney(financial.outstanding),
 
-        expenses:
-          roundMoney(
-            financial.totalExpenses,
-          ),
+        expenses: roundMoney(financial.totalExpenses),
 
-        netRevenue:
-          roundMoney(
-            financial.netRevenue,
-          ),
+        netRevenue: roundMoney(financial.netRevenue),
 
-        netCollected:
-          roundMoney(
-            financial.netCollected,
-          ),
+        netCollected: roundMoney(financial.netCollected),
 
-        currency:
-          financial.currency || "NGN",
+        currency: financial.currency || "NGN",
       },
 
       sales: {
-        count:
-          salesTotals.totalSales || 0,
+        count: salesTotals.totalSales || 0,
 
-        fishSold:
-          salesTotals.totalFishSold || 0,
+        fishSold: salesTotals.totalFishSold || 0,
 
-        weightKg:
-          roundWeight(
-            salesTotals.totalWeightKg,
-          ),
+        weightKg: roundWeight(salesTotals.totalWeightKg),
 
-        revenue:
-          roundMoney(
-            salesTotals.totalRevenue,
-          ),
+        revenue: roundMoney(salesTotals.totalRevenue),
 
-        collected:
-          roundMoney(
-            salesTotals.totalCollected,
-          ),
+        collected: roundMoney(salesTotals.totalCollected),
 
-        outstanding:
-          roundMoney(
-            salesTotals.totalOutstanding,
-          ),
+        outstanding: roundMoney(salesTotals.totalOutstanding),
       },
 
       expenses: {
-        count:
-          expenses.expenseCount || 0,
+        count: expenses.expenseCount || 0,
 
-        total:
-          roundMoney(
-            expenses.totalExpenses,
-          ),
+        total: roundMoney(expenses.totalExpenses),
       },
 
       inventory: {
-        totalItems:
-          inventory.totalItems || 0,
+        totalItems: inventory.totalItems || 0,
 
-        lowStock:
-          inventory.lowStockCount || 0,
+        lowStock: inventory.lowStockCount || 0,
 
-        outOfStock:
-          inventory.outOfStockCount || 0,
+        outOfStock: inventory.outOfStockCount || 0,
       },
 
       growth: {
-        totalRecords:
-          growth.totalRecords || 0,
+        totalRecords: growth.totalRecords || 0,
 
         latest:
-          Array.isArray(
-            growth.summary,
-          ) && growth.summary.length > 0
+          Array.isArray(growth.summary) && growth.summary.length > 0
             ? growth.summary[0]
             : null,
       },
     },
 
     financial: {
-      revenue:
-        roundMoney(
-          financial.revenue,
-        ),
+      revenue: roundMoney(financial.revenue),
 
-      collected:
-        roundMoney(
-          financial.collected,
-        ),
+      collected: roundMoney(financial.collected),
 
-      outstanding:
-        roundMoney(
-          financial.outstanding,
-        ),
+      outstanding: roundMoney(financial.outstanding),
 
-      totalExpenses:
-        roundMoney(
-          financial.totalExpenses,
-        ),
+      totalExpenses: roundMoney(financial.totalExpenses),
 
-      netRevenue:
-        roundMoney(
-          financial.netRevenue,
-        ),
+      netRevenue: roundMoney(financial.netRevenue),
 
-      netCollected:
-        roundMoney(
-          financial.netCollected,
-        ),
+      netCollected: roundMoney(financial.netCollected),
 
-      currency:
-        financial.currency || "NGN",
+      currency: financial.currency || "NGN",
     },
 
     sales: {
       totals: {
-        totalSales:
-          salesTotals.totalSales || 0,
+        totalSales: salesTotals.totalSales || 0,
 
-        totalFishSold:
-          salesTotals.totalFishSold || 0,
+        totalFishSold: salesTotals.totalFishSold || 0,
 
-        totalWeightKg:
-          roundWeight(
-            salesTotals.totalWeightKg,
-          ),
+        totalWeightKg: roundWeight(salesTotals.totalWeightKg),
 
-        totalRevenue:
-          roundMoney(
-            salesTotals.totalRevenue,
-          ),
+        totalRevenue: roundMoney(salesTotals.totalRevenue),
 
-        totalCollected:
-          roundMoney(
-            salesTotals.totalCollected,
-          ),
+        totalCollected: roundMoney(salesTotals.totalCollected),
 
-        totalOutstanding:
-          roundMoney(
-            salesTotals.totalOutstanding,
-          ),
+        totalOutstanding: roundMoney(salesTotals.totalOutstanding),
       },
 
-      byDay:
-        sales.byDay || [],
+      byDay: sales.byDay || [],
 
-      byPaymentStatus:
-        sales.byPaymentStatus || [],
+      byPaymentStatus: sales.byPaymentStatus || [],
     },
 
     expenses: {
-      totalExpenses:
-        roundMoney(
-          expenses.totalExpenses,
-        ),
+      totalExpenses: roundMoney(expenses.totalExpenses),
 
-      expenseCount:
-        expenses.expenseCount || 0,
+      expenseCount: expenses.expenseCount || 0,
 
-      byCategory:
-        expenses.byCategory || [],
+      byCategory: expenses.byCategory || [],
 
-      byMonth:
-        expenses.byMonth || [],
+      byMonth: expenses.byMonth || [],
 
-      byDay:
-        expenses.byDay || [],
+      byDay: expenses.byDay || [],
     },
 
     production: {
@@ -437,20 +296,15 @@ const getDashboard = async ({
     inventory,
 
     charts: {
-      salesByDay:
-        sales.byDay || [],
+      salesByDay: sales.byDay || [],
 
-      expensesByDay:
-        expenses.byDay || [],
+      expensesByDay: expenses.byDay || [],
 
-      expensesByCategory:
-        expenses.byCategory || [],
+      expensesByCategory: expenses.byCategory || [],
 
-      expensesByMonth:
-        expenses.byMonth || [],
+      expensesByMonth: expenses.byMonth || [],
 
-      growth:
-        growth.chartData || [],
+      growth: growth.chartData || [],
     },
 
     recentActivities,

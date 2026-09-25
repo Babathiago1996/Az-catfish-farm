@@ -933,26 +933,79 @@ class InventoryService {
     if (options.inventoryItem) {
       validateObjectId(options.inventoryItem);
 
-      query.inventoryItem = options.inventoryItem;
+      query.inventoryItem = new mongoose.Types.ObjectId(options.inventoryItem);
     }
 
-    const [transactions, total] = await Promise.all([
-      InventoryTransaction.find(query)
-        .populate({
-          path: "inventoryItem",
-          select:
-            "name category unit quantity reorderLevel unitCost supplier isActive",
-        })
-        .sort({
+    /*
+     * A transaction whose inventoryItem no longer resolves to a
+     * real Inventory document belongs to a permanently deleted
+     * item. Deleting an item now cascades and removes its
+     * transactions too (see deleteItem below), so this can only
+     * happen from data created before that fix existed — and it
+     * must never be shown, paginated, or counted as if it were
+     * still real. The $lookup below turns this into a genuine
+     * inner join: no matching item, no row.
+     */
+    const pipeline = [
+      { $match: query },
+      {
+        $lookup: {
+          from: "inventories",
+          localField: "inventoryItem",
+          foreignField: "_id",
+          as: "item",
+        },
+      },
+      { $match: { item: { $ne: [] } } },
+      { $unwind: "$item" },
+      {
+        $sort: {
           transactionDate: -1,
           createdAt: -1,
-        })
-        .skip(skip)
-        .limit(limit)
-        .lean(),
+        },
+      },
+      {
+        $facet: {
+          rows: [
+            { $skip: skip },
+            { $limit: limit },
+            {
+              $project: {
+                _id: 1,
+                transactionType: 1,
+                quantity: 1,
+                previousQuantity: 1,
+                newQuantity: 1,
+                unitCost: 1,
+                referenceType: 1,
+                referenceId: 1,
+                notes: 1,
+                transactionDate: 1,
+                createdAt: 1,
+                inventoryItem: {
+                  _id: "$item._id",
+                  name: "$item.name",
+                  category: "$item.category",
+                  unit: "$item.unit",
+                  quantity: "$item.quantity",
+                  reorderLevel: "$item.reorderLevel",
+                  unitCost: "$item.unitCost",
+                  supplier: "$item.supplier",
+                  isActive: "$item.isActive",
+                },
+              },
+            },
+          ],
+          totalCount: [{ $count: "count" }],
+        },
+      },
+    ];
 
-      InventoryTransaction.countDocuments(query),
-    ]);
+    const [result] = await InventoryTransaction.aggregate(pipeline);
+
+    const transactions = result?.rows || [];
+
+    const total = result?.totalCount?.[0]?.count || 0;
 
     return {
       transactions,
@@ -960,7 +1013,7 @@ class InventoryService {
         page,
         limit,
         total,
-        pages: Math.ceil(total / limit),
+        pages: total === 0 ? 0 : Math.ceil(total / limit),
       },
     };
   }

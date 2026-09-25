@@ -165,15 +165,19 @@ const getAuditYears = async () => {
 
   const years = new Set([getCurrentLagosYear()]);
 
-  [stockingYears, expenseYears, inventoryYears, saleYears, mortalityYears].forEach(
-    (result) => {
-      result.forEach((item) => {
-        if (Number.isInteger(item._id)) {
-          years.add(item._id);
-        }
-      });
-    },
-  );
+  [
+    stockingYears,
+    expenseYears,
+    inventoryYears,
+    saleYears,
+    mortalityYears,
+  ].forEach((result) => {
+    result.forEach((item) => {
+      if (Number.isInteger(item._id)) {
+        years.add(item._id);
+      }
+    });
+  });
 
   return Array.from(years).sort((a, b) => b - a);
 };
@@ -297,8 +301,31 @@ const computePeriodFinancials = async ({
       },
     ]),
 
+    /*
+     * INNER JOIN, not a lookup + preserve.
+     *
+     * A "stock_in" transaction whose inventoryItem no longer
+     * resolves to a real Inventory document belonged to an
+     * item that has since been permanently deleted. Deleting
+     * an item now cascades and removes its transactions too
+     * (see inventoryService.deleteItem), so this only matters
+     * for data created before that fix existed — and it must
+     * never be counted as money currently spent on production.
+     * The $match on a non-empty "item" array turns this into a
+     * genuine inner join: no matching item, no contribution to
+     * the total.
+     */
     InventoryTransaction.aggregate([
       { $match: inventoryMatch },
+      {
+        $lookup: {
+          from: "inventories",
+          localField: "inventoryItem",
+          foreignField: "_id",
+          as: "item",
+        },
+      },
+      { $match: { item: { $ne: [] } } },
       {
         $group: {
           _id: null,
@@ -319,7 +346,8 @@ const computePeriodFinancials = async ({
           as: "item",
         },
       },
-      { $unwind: { path: "$item", preserveNullAndEmptyArrays: true } },
+      { $match: { item: { $ne: [] } } },
+      { $unwind: "$item" },
       {
         $group: {
           _id: { $ifNull: ["$item.category", "other"] },
@@ -451,9 +479,7 @@ const computePeriodFinancials = async ({
 
   const netProfit = roundMoney(totalRevenue - totalCostOfProduction);
 
-  const netProfitCollected = roundMoney(
-    totalCollected - totalCostOfProduction,
-  );
+  const netProfitCollected = roundMoney(totalCollected - totalCostOfProduction);
 
   const profitMarginPercent =
     totalRevenue > 0 ? roundNumber((netProfit / totalRevenue) * 100) : null;
@@ -472,8 +498,7 @@ const computePeriodFinancials = async ({
     stockingQuantity > 0
       ? roundNumber(
           Math.max(
-            ((stockingQuantity - mortalityQuantity) / stockingQuantity) *
-              100,
+            ((stockingQuantity - mortalityQuantity) / stockingQuantity) * 100,
             0,
           ),
         )
@@ -569,49 +594,65 @@ const computePeriodFinancials = async ({
   };
 
   if (includeItems) {
-    const [stockingItems, expenseItems, inventoryItems, mortalityItems, saleItems] =
-      await Promise.all([
-        Stocking.find(stockingMatch)
-          .sort({ stockingDate: -1 })
-          .populate("pond", "name pondNumber")
-          .select(
-            "stockingDate pond fingerlingQuantity fingerlingSize fingerlingSizeUnit supplier cost",
-          )
-          .lean(),
+    const [
+      stockingItems,
+      expenseItems,
+      inventoryItems,
+      mortalityItems,
+      saleItems,
+    ] = await Promise.all([
+      Stocking.find(stockingMatch)
+        .sort({ stockingDate: -1 })
+        .populate("pond", "name pondNumber")
+        .select(
+          "stockingDate pond fingerlingQuantity fingerlingSize fingerlingSizeUnit supplier cost",
+        )
+        .lean(),
 
-        Expense.find(expenseMatch)
-          .sort({ expenseDate: -1 })
-          .select("expenseDate category description amount vendor reference")
-          .lean(),
+      Expense.find(expenseMatch)
+        .sort({ expenseDate: -1 })
+        .select("expenseDate category description amount vendor reference")
+        .lean(),
 
-        InventoryTransaction.find(inventoryMatch)
-          .sort({ transactionDate: -1 })
-          .populate("inventoryItem", "name category unit")
-          .select("transactionDate inventoryItem quantity unitCost referenceType notes")
-          .lean(),
+      InventoryTransaction.find(inventoryMatch)
+        .sort({ transactionDate: -1 })
+        .populate("inventoryItem", "name category unit")
+        .select(
+          "transactionDate inventoryItem quantity unitCost referenceType notes",
+        )
+        .lean(),
 
-        Mortality.find(mortalityMatch)
-          .sort({ date: -1 })
-          .populate("pond", "name pondNumber")
-          .select("date pond quantity estimatedCause notes")
-          .lean(),
+      Mortality.find(mortalityMatch)
+        .sort({ date: -1 })
+        .populate("pond", "name pondNumber")
+        .select("date pond quantity estimatedCause notes")
+        .lean(),
 
-        Sale.find(saleMatch)
-          .sort({ saleDate: -1 })
-          .populate("pond", "name pondNumber")
-          .select(
-            "invoiceNumber saleDate pond customerName quantitySold totalWeight totalAmount amountPaid paymentStatus",
-          )
-          .lean(),
-      ]);
+      Sale.find(saleMatch)
+        .sort({ saleDate: -1 })
+        .populate("pond", "name pondNumber")
+        .select(
+          "invoiceNumber saleDate pond customerName quantitySold totalWeight totalAmount amountPaid paymentStatus",
+        )
+        .lean(),
+    ]);
 
     result.stocking.items = stockingItems;
     result.expenses.items = expenseItems;
 
-    result.inventory.items = inventoryItems.map((item) => ({
-      ...item,
-      amount: roundMoney((item.quantity || 0) * (item.unitCost || 0)),
-    }));
+    /*
+     * populate() silently resolves a deleted item's reference to
+     * null. Those rows belong to a permanently deleted inventory
+     * item and must never be shown in the ledger — filter them
+     * out here as a last line of defence, on top of the inner
+     * joins already applied to the totals above.
+     */
+    result.inventory.items = inventoryItems
+      .filter((item) => item.inventoryItem)
+      .map((item) => ({
+        ...item,
+        amount: roundMoney((item.quantity || 0) * (item.unitCost || 0)),
+      }));
 
     result.mortality.items = mortalityItems;
     result.sales.items = saleItems;
