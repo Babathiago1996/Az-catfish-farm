@@ -264,7 +264,6 @@ const computePeriodFinancials = async ({
     transactionType: "stock_in",
   };
 
-  const inventoryValueExpr = { $multiply: ["$quantity", "$unitCost"] };
 
   const [
     stockingAgg,
@@ -359,10 +358,14 @@ const computePeriodFinancials = async ({
         },
       },
       { $match: { item: { $ne: [] } } },
+      { $unwind: "$item" },
       {
         $group: {
           _id: null,
-          totalValue: { $sum: inventoryValueExpr },
+          // IMPORTANT: audit cost follows the CURRENT inventory unitCost.
+          // Updating an inventory item's unit cost therefore immediately
+          // updates the audit value for its existing stock-in quantity.
+          totalValue: { $sum: { $multiply: ["$quantity", "$item.unitCost"] } },
           totalQuantity: { $sum: "$quantity" },
           records: { $sum: 1 },
         },
@@ -397,7 +400,7 @@ const computePeriodFinancials = async ({
       {
         $group: {
           _id: { $ifNull: ["$item.category", "other"] },
-          amount: { $sum: inventoryValueExpr },
+          amount: { $sum: { $multiply: ["$quantity", "$item.unitCost"] } },
           quantity: { $sum: "$quantity" },
           count: { $sum: 1 },
         },
@@ -699,10 +702,17 @@ const computePeriodFinancials = async ({
      */
     result.inventory.items = inventoryItems
       .filter((item) => item.inventoryItem?.isActive === true)
-      .map((item) => ({
-        ...item,
-        amount: roundMoney((item.quantity || 0) * (item.unitCost || 0)),
-      }));
+      .map((item) => {
+        // Audit uses the item's current unit cost, not the stale cost
+        // captured when the original transaction was created.
+        const currentUnitCost = Number(item.inventoryItem?.unitCost || 0);
+
+        return {
+          ...item,
+          unitCost: currentUnitCost,
+          amount: roundMoney((item.quantity || 0) * currentUnitCost),
+        };
+      });
 
     result.mortality.items = mortalityItems;
     result.sales.items = saleItems;
