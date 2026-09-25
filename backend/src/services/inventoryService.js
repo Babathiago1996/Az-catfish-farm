@@ -923,10 +923,9 @@ class InventoryService {
    */
 
   async getAllTransactions(options = {}) {
+    const all = options.all === true || String(options.all).toLowerCase() === "true";
     const limit = Math.min(Math.max(Number(options.limit) || 50, 1), 200);
-
     const page = Math.max(Number(options.page) || 1, 1);
-
     const skip = (page - 1) * limit;
 
     const query = {};
@@ -959,14 +958,78 @@ class InventoryService {
      * still real. The $lookup below turns this into a genuine
      * inner join: no matching item, no row.
      */
+    const projectStage = {
+      $project: {
+        _id: 1,
+        transactionType: 1,
+        quantity: 1,
+        previousQuantity: 1,
+        newQuantity: 1,
+        unitCost: 1,
+        referenceType: 1,
+        referenceId: 1,
+        notes: 1,
+        transactionDate: 1,
+        createdAt: 1,
+        inventoryItem: {
+          _id: "$item._id",
+          name: "$item.name",
+          category: "$item.category",
+          unit: "$item.unit",
+          quantity: "$item.quantity",
+          reorderLevel: "$item.reorderLevel",
+          unitCost: "$item.unitCost",
+          supplier: "$item.supplier",
+          isActive: "$item.isActive",
+        },
+      },
+    };
+
+    if (all) {
+      const rows = await InventoryTransaction.aggregate([
+        { $match: query },
+        {
+          $lookup: {
+            from: "inventories",
+            let: { inventoryId: "$inventoryItem" },
+            pipeline: [
+              {
+                $match: {
+                  $expr: {
+                    $and: [
+                      { $eq: ["$_id", "$$inventoryId"] },
+                      { $eq: ["$isActive", true] },
+                    ],
+                  },
+                },
+              },
+            ],
+            as: "item",
+          },
+        },
+        { $match: { item: { $ne: [] } } },
+        { $unwind: "$item" },
+        { $sort: { transactionDate: -1, createdAt: -1 } },
+        projectStage,
+      ]);
+
+      return {
+        transactions: rows.map(buildTransactionView),
+        pagination: {
+          page: 1,
+          limit: rows.length || 1,
+          total: rows.length,
+          pages: rows.length ? 1 : 0,
+        },
+      };
+    }
+
     const pipeline = [
       { $match: query },
       {
         $lookup: {
           from: "inventories",
-          let: {
-            inventoryId: "$inventoryItem",
-          },
+          let: { inventoryId: "$inventoryItem" },
           pipeline: [
             {
               $match: {
@@ -984,53 +1047,17 @@ class InventoryService {
       },
       { $match: { item: { $ne: [] } } },
       { $unwind: "$item" },
-      {
-        $sort: {
-          transactionDate: -1,
-          createdAt: -1,
-        },
-      },
+      { $sort: { transactionDate: -1, createdAt: -1 } },
       {
         $facet: {
-          rows: [
-            { $skip: skip },
-            { $limit: limit },
-            {
-              $project: {
-                _id: 1,
-                transactionType: 1,
-                quantity: 1,
-                previousQuantity: 1,
-                newQuantity: 1,
-                unitCost: 1,
-                referenceType: 1,
-                referenceId: 1,
-                notes: 1,
-                transactionDate: 1,
-                createdAt: 1,
-                inventoryItem: {
-                  _id: "$item._id",
-                  name: "$item.name",
-                  category: "$item.category",
-                  unit: "$item.unit",
-                  quantity: "$item.quantity",
-                  reorderLevel: "$item.reorderLevel",
-                  unitCost: "$item.unitCost",
-                  supplier: "$item.supplier",
-                  isActive: "$item.isActive",
-                },
-              },
-            },
-          ],
+          rows: [{ $skip: skip }, { $limit: limit }, projectStage],
           totalCount: [{ $count: "count" }],
         },
       },
     ];
 
     const [result] = await InventoryTransaction.aggregate(pipeline);
-
     const transactions = result?.rows || [];
-
     const total = result?.totalCount?.[0]?.count || 0;
 
     return {

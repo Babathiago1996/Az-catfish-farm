@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import {
   Plus,
@@ -714,6 +714,12 @@ export default function Inventory() {
   });
 
   /*
+   * Prevent accidental double-submit from creating two real
+   * inventory movements when the user taps/clicks quickly.
+   */
+  const inventoryOperationRef = useRef(false);
+
+  /*
    * ---------------------------------------------------------
    * LOAD INVENTORY
    * ---------------------------------------------------------
@@ -782,16 +788,11 @@ export default function Inventory() {
    *
    * IMPORTANT:
    *
-   * Your backend currently exposes:
-   *
-   * GET /inventory/:id/transactions
-   *
-   * It does NOT expose:
+   * The backend exposes a global:
    *
    * GET /inventory/transactions
    *
-   * Therefore we retrieve the active inventory items
-   * and then retrieve the history of each item.
+   * This function uses that endpoint once per backend page.
    *
    */
 
@@ -800,144 +801,44 @@ export default function Inventory() {
       setHistoryLoading(true);
 
       /*
-       * Always retrieve the complete active inventory list.
+       * GLOBAL HISTORY IS ONE REQUEST.
        *
-       * Do NOT use the current inventory table filters here,
-       * because transaction history must contain historical
-       * transactions for every inventory item.
+       * Never loop through inventory items here. The backend already
+       * owns the complete transaction ledger. The previous UI loaded
+       * the same ledger once per item, which is why five inventory
+       * items produced five copies of every transaction.
        */
+      const response = await api.inventory.transactions({ all: true });
 
-      const inventoryResponse = await api.inventory.list({});
-
-      const inventoryItems = Array.isArray(inventoryResponse)
-        ? inventoryResponse
-        : [];
+      const transactions = Array.isArray(response)
+        ? response
+        : Array.isArray(response?.transactions)
+          ? response.transactions
+          : [];
 
       /*
-       * Build an inventory lookup map.
+       * The server returns immutable MongoDB transaction IDs. Keep one
+       * visual row per ID as a final defensive guard.
        */
+      const uniqueById = new Map();
 
-      const inventoryMap = inventoryItems.reduce((map, inventoryItem) => {
-        const id = getId(inventoryItem?._id);
+      transactions.forEach((transaction) => {
+        const id = getId(transaction?._id);
 
         if (id) {
-          map[id] = inventoryItem;
+          uniqueById.set(id, transaction);
         }
+      });
 
-        return map;
-      }, {});
-
-      /*
-       * No inventory means no transactions.
-       */
-
-      if (!inventoryItems.length) {
-        setAllTransactions([]);
-        setHistory([]);
-        setHistoryMeta({
-          page: 1,
-          limit: historyFilters.limit || 25,
-          total: 0,
-          pages: 0,
-        });
-
-        return [];
-      }
-
-      /*
-       * Retrieve every item's transaction history.
-       *
-       * Your backend accepts a maximum limit of 200,
-       * so we request 200 records per inventory item.
-       */
-
-      const transactionResponses = await Promise.all(
-        inventoryItems.map(async (inventoryItem) => {
-          const id = getId(inventoryItem?._id);
-
-          if (!id) {
-            return [];
-          }
-
-          try {
-            const response = await api.inventory.transactions(id, {
-              page: 1,
-              limit: 200,
-            });
-
-            /*
-             * Depending on your api-client
-             * unwrapPaginated implementation,
-             * this may be:
-             *
-             * array
-             *
-             * or:
-             *
-             * {
-             *   transactions,
-             *   pagination
-             * }
-             */
-
-            if (Array.isArray(response)) {
-              return response;
-            }
-
-            if (Array.isArray(response?.transactions)) {
-              return response.transactions;
-            }
-
-            return [];
-          } catch (error) {
-            /*
-             * One bad item should not prevent
-             * the entire inventory history from
-             * displaying.
-             */
-
-            console.error(
-              `Unable to load transaction history for inventory item ${id}:`,
-              error,
-            );
-
-            return [];
-          }
-        }),
-      );
-
-      /*
-       * Flatten all transaction arrays.
-       */
-
-      const combined = transactionResponses.flat();
-
-      /*
-       * Normalize every transaction.
-       */
-
-      const normalized = combined.map((transaction) =>
-        normalizeTransaction(transaction, inventoryMap),
-      );
-
-      /*
-       * Sort newest first.
-       */
+      const normalized = Array.from(uniqueById.values())
+        .map((transaction) => normalizeTransaction(transaction, {}))
+        .filter((transaction) => transaction.inventoryItemId);
 
       const sorted = sortTransactions(normalized);
 
       setAllTransactions(sorted);
 
-      /*
-       * Apply current filters.
-       */
-
       const filtered = filterTransactions(sorted, historyFilters);
-
-      /*
-       * Paginate.
-       */
-
       const paginated = paginateTransactions(
         filtered,
         historyFilters.page,
@@ -945,25 +846,20 @@ export default function Inventory() {
       );
 
       setHistory(paginated.rows);
-
       setHistoryMeta(paginated.meta);
 
       return sorted;
     } catch (error) {
       console.error("Unable to load all inventory transactions:", error);
-
       toast.error(error?.message || "Unable to load transaction history.");
-
       setAllTransactions([]);
       setHistory([]);
-
       setHistoryMeta({
         page: 1,
         limit: historyFilters.limit || 25,
         total: 0,
         pages: 0,
       });
-
       return [];
     } finally {
       setHistoryLoading(false);
@@ -996,7 +892,7 @@ export default function Inventory() {
        * Never pass the complete item object.
        */
 
-      const response = await api.inventory.transactions(id, {
+      const response = await api.inventory.itemTransactions(id, {
         page: 1,
         limit: 200,
       });
@@ -1047,15 +943,6 @@ export default function Inventory() {
   }, [filters.category, filters.status, filters.search]);
 
   /*
-   * Load transaction history once
-   * when the page opens.
-   */
-
-  useEffect(() => {
-    loadAllTransactions();
-  }, []);
-
-  /*
    * ---------------------------------------------------------
    * APPLY HISTORY FILTERS LOCALLY
    * ---------------------------------------------------------
@@ -1089,6 +976,12 @@ export default function Inventory() {
    */
 
   const submit = async (data) => {
+    if (inventoryOperationRef.current) {
+      return;
+    }
+
+    inventoryOperationRef.current = true;
+
     try {
       const payload = {
         ...data,
@@ -1145,6 +1038,8 @@ export default function Inventory() {
       await loadAllTransactions();
     } catch (error) {
       toast.error(error?.message || "Unable to save inventory item.");
+    } finally {
+      inventoryOperationRef.current = false;
     }
   };
 
@@ -1206,6 +1101,12 @@ export default function Inventory() {
    */
 
   const submitAction = async (data) => {
+    if (inventoryOperationRef.current) {
+      return;
+    }
+
+    inventoryOperationRef.current = true;
+
     try {
       if (!item?._id) {
         throw new Error("Invalid inventory item.");
@@ -1336,34 +1237,45 @@ export default function Inventory() {
       await loadAllTransactions();
     } catch (error) {
       toast.error(error?.message || "Unable to update inventory quantity.");
+    } finally {
+      inventoryOperationRef.current = false;
     }
   };
 
   /*
    * ---------------------------------------------------------
-   * REMOVE / DEACTIVATE
+   * REMOVE / PERMANENTLY DELETE
    * ---------------------------------------------------------
    */
 
   const remove = async (id) => {
+    if (!id || inventoryOperationRef.current) {
+      return;
+    }
+
     const confirmed = window.confirm(
-      "Deactivate this inventory item? Its transaction history will be retained permanently.",
+      "Permanently delete this inventory item and all transaction history attached to it? This cannot be undone.",
     );
 
     if (!confirmed) {
       return;
     }
 
+    inventoryOperationRef.current = true;
+
     try {
       await api.inventory.remove(id);
 
-      toast.success("Inventory item deactivated.");
+      toast.success("Inventory item permanently deleted.");
 
       await loadInventory();
-
       await loadAllTransactions();
     } catch (error) {
-      toast.error(error?.message || "Unable to deactivate inventory item.");
+      toast.error(
+        error?.message || "Unable to permanently delete inventory item.",
+      );
+    } finally {
+      inventoryOperationRef.current = false;
     }
   };
 
@@ -1465,7 +1377,22 @@ export default function Inventory() {
    */
 
   const transactionSummary = useMemo(() => {
-    return history.reduce(
+    /*
+     * IMPORTANT:
+     *
+     * `history` is the CURRENT UI PAGE (for example 25 rows).
+     * Summing it makes Stock In / Stock Out / Movement Value
+     * incorrect whenever there are more transactions than one page.
+     *
+     * Always calculate the summary from the complete filtered
+     * transaction set, then paginate only the table itself.
+     */
+    const summaryTransactions = filterTransactions(
+      allTransactions,
+      historyFilters,
+    );
+
+    return summaryTransactions.reduce(
       (result, transaction) => {
         const value = Number(transaction.value || 0);
 
@@ -1523,7 +1450,7 @@ export default function Inventory() {
         expired: 0,
       },
     );
-  }, [history]);
+  }, [allTransactions, historyFilters]);
 
   /*
    * ---------------------------------------------------------
