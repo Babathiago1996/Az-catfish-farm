@@ -154,7 +154,11 @@ export function DashboardShell({
         )}
       >
         <div className="flex h-20 items-center border-b border-[var(--border)] px-4">
-          <Link href="/dashboard" className="flex min-w-0 items-center gap-3">
+          <Link
+            href="/dashboard"
+            replace
+            className="flex min-w-0 items-center gap-3"
+          >
             <div className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-slate-950 text-sm font-black text-white dark:bg-white dark:text-slate-950">
               AZ
             </div>
